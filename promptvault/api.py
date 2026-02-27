@@ -1,4 +1,5 @@
 import json
+import base64
 
 from aiohttp import web
 
@@ -60,7 +61,30 @@ def setup_routes():
             entry = store.get_entry(entry_id)
         except KeyError:
             return _json_response({"error": "未找到记录"}, status=404)
+        try:
+            thumb = store.get_entry_thumbnail(entry_id)
+            if thumb and thumb.get("png"):
+                b64 = base64.b64encode(thumb["png"]).decode("ascii")
+                entry["thumbnail_data_url"] = f"data:image/png;base64,{b64}"
+        except Exception:
+            entry["thumbnail_data_url"] = ""
         return _json_response(entry)
+
+    @routes.get("/promptvault/entries/{entry_id}/thumbnail")
+    async def get_entry_thumbnail(request):
+        store = PromptVaultStore.get()
+        entry_id = request.match_info["entry_id"]
+        try:
+            thumb = store.get_entry_thumbnail(entry_id)
+        except KeyError:
+            return _json_response({"error": "未找到记录"}, status=404)
+        if not thumb:
+            return _json_response({"error": "未找到缩略图"}, status=404)
+        return web.Response(
+            body=thumb["png"],
+            content_type="image/png",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @routes.put("/promptvault/entries/{entry_id}")
     async def update_entry(request):

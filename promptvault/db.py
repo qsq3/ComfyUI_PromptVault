@@ -34,13 +34,25 @@ class PromptVaultStore:
         conn = self._connect()
         try:
             conn.executescript(SCHEMA_SQL)
+            self._migrate_db(conn)
             conn.execute(
                 "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version', ?)",
-                ("1",),
+                ("2",),
             )
             conn.commit()
         finally:
             conn.close()
+
+    def _migrate_db(self, conn):
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(entries)").fetchall()}
+        if "params_json" not in cols:
+            conn.execute("ALTER TABLE entries ADD COLUMN params_json TEXT NOT NULL DEFAULT '{}'")
+        if "thumbnail_png" not in cols:
+            conn.execute("ALTER TABLE entries ADD COLUMN thumbnail_png BLOB")
+        if "thumbnail_width" not in cols:
+            conn.execute("ALTER TABLE entries ADD COLUMN thumbnail_width INTEGER")
+        if "thumbnail_height" not in cols:
+            conn.execute("ALTER TABLE entries ADD COLUMN thumbnail_height INTEGER")
 
     def _fts_upsert(self, conn, entry):
         tags = " ".join(entry.get("tags", []))
@@ -49,6 +61,7 @@ class PromptVaultStore:
                 entry.get("raw", {}).get("positive", ""),
                 entry.get("raw", {}).get("negative", ""),
                 json.dumps(entry.get("variables", {}), ensure_ascii=False),
+                json.dumps(entry.get("params", {}), ensure_ascii=False),
             ]
         )
         conn.execute("DELETE FROM entries_fts WHERE entry_id = ?", (entry["id"],))
@@ -66,6 +79,15 @@ class PromptVaultStore:
         raw_pos = normalize_text(raw.get("positive", ""))
         raw_neg = normalize_text(raw.get("negative", ""))
 
+        params = payload.get("params") or {}
+        if not isinstance(params, dict):
+            params = {}
+
+        thumbnail_png = payload.get("thumbnail_png")
+        has_thumbnail = isinstance(thumbnail_png, (bytes, bytearray)) and len(thumbnail_png) > 0
+        thumb_w = int(payload.get("thumbnail_width") or 0) or None
+        thumb_h = int(payload.get("thumbnail_height") or 0) or None
+
         entry_id = payload.get("id") or f"entry_{uuid.uuid4().hex}"
         now = now_iso()
 
@@ -82,6 +104,10 @@ class PromptVaultStore:
             "fragments": payload.get("fragments") or [],
             "raw": {"positive": raw_pos, "negative": raw_neg},
             "negative": payload.get("negative") or {"fragments": [], "raw": raw_neg},
+            "params": params,
+            "has_thumbnail": has_thumbnail,
+            "thumbnail_width": thumb_w,
+            "thumbnail_height": thumb_h,
         }
         entry_obj["hash"] = stable_hash(entry_obj)
         entry_obj["created_at"] = now
@@ -93,8 +119,9 @@ class PromptVaultStore:
                 """
                 INSERT INTO entries(
                   id,title,status,version,lang,template_id,tags_json,model_scope_json,
-                  variables_json,fragments_json,raw_json,negative_json,hash,created_at,updated_at
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  variables_json,fragments_json,raw_json,negative_json,params_json,
+                  thumbnail_png,thumbnail_width,thumbnail_height,hash,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     entry_obj["id"],
@@ -109,6 +136,10 @@ class PromptVaultStore:
                     json_dumps(entry_obj["fragments"]),
                     json_dumps(entry_obj["raw"]),
                     json_dumps(entry_obj["negative"]),
+                    json_dumps(entry_obj["params"]),
+                    sqlite3.Binary(bytes(thumbnail_png)) if has_thumbnail else None,
+                    entry_obj["thumbnail_width"],
+                    entry_obj["thumbnail_height"],
                     entry_obj["hash"],
                     entry_obj["created_at"],
                     entry_obj["updated_at"],
@@ -248,6 +279,26 @@ class PromptVaultStore:
         finally:
             conn.close()
 
+    def get_entry_thumbnail(self, entry_id):
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT thumbnail_png, thumbnail_width, thumbnail_height FROM entries WHERE id = ?",
+                (entry_id,),
+            ).fetchone()
+            if not row:
+                raise KeyError("entry not found")
+            blob = row["thumbnail_png"]
+            if blob is None:
+                return None
+            return {
+                "png": bytes(blob),
+                "width": row["thumbnail_width"],
+                "height": row["thumbnail_height"],
+            }
+        finally:
+            conn.close()
+
     def update_entry(self, entry_id, payload):
         conn = self._connect()
         try:
@@ -256,7 +307,11 @@ class PromptVaultStore:
                 raise KeyError("entry not found")
             entry = self._row_to_entry(row)
 
-            # Only update a conservative subset for V1 UI.
+            current_thumb_blob = row["thumbnail_png"]
+            thumb_blob = current_thumb_blob
+            thumb_w = row["thumbnail_width"]
+            thumb_h = row["thumbnail_height"]
+
             if "title" in payload:
                 entry["title"] = normalize_text(payload.get("title", "")) or entry["title"]
             if "tags" in payload:
@@ -272,7 +327,24 @@ class PromptVaultStore:
                 variables = payload.get("variables") or {}
                 if isinstance(variables, dict):
                     entry["variables"] = variables
+            if "params" in payload:
+                params = payload.get("params") or {}
+                if isinstance(params, dict):
+                    entry["params"] = params
+            if "thumbnail_png" in payload:
+                new_thumb = payload.get("thumbnail_png")
+                if isinstance(new_thumb, (bytes, bytearray)) and len(new_thumb) > 0:
+                    thumb_blob = sqlite3.Binary(bytes(new_thumb))
+                    thumb_w = int(payload.get("thumbnail_width") or 0) or None
+                    thumb_h = int(payload.get("thumbnail_height") or 0) or None
+                else:
+                    thumb_blob = None
+                    thumb_w = None
+                    thumb_h = None
 
+            entry["has_thumbnail"] = thumb_blob is not None
+            entry["thumbnail_width"] = thumb_w
+            entry["thumbnail_height"] = thumb_h
             entry["version"] = int(entry.get("version", 1)) + 1
             entry["updated_at"] = now_iso()
             entry["hash"] = stable_hash(entry)
@@ -287,6 +359,10 @@ class PromptVaultStore:
                   variables_json=?,
                   raw_json=?,
                   negative_json=?,
+                  params_json=?,
+                  thumbnail_png=?,
+                  thumbnail_width=?,
+                  thumbnail_height=?,
                   hash=?,
                   updated_at=?
                 WHERE id=?
@@ -299,6 +375,10 @@ class PromptVaultStore:
                     json_dumps(entry["variables"]),
                     json_dumps(entry["raw"]),
                     json_dumps(entry["negative"]),
+                    json_dumps(entry.get("params", {})),
+                    thumb_blob,
+                    thumb_w,
+                    thumb_h,
                     entry["hash"],
                     entry["updated_at"],
                     entry["id"],
@@ -353,7 +433,6 @@ class PromptVaultStore:
             params = [status]
 
             if model:
-                # model_scope_json is JSON array; V1 uses LIKE as a pragmatic filter.
                 where.append("e.model_scope_json LIKE ?")
                 params.append(f"%{model}%")
 
@@ -370,8 +449,7 @@ class PromptVaultStore:
                 ORDER BY bm25(entries_fts) ASC, e.updated_at DESC
                 LIMIT ? OFFSET ?
                 """
-                params2 = params + [q, int(limit), int(offset)]
-                rows = conn.execute(sql, params2).fetchall()
+                rows = conn.execute(sql, params + [q, int(limit), int(offset)]).fetchall()
             else:
                 sql = f"""
                 SELECT e.id, e.title, e.tags_json, e.model_scope_json, e.updated_at
@@ -428,6 +506,10 @@ class PromptVaultStore:
             "fragments": json.loads(row["fragments_json"] or "[]"),
             "raw": json.loads(row["raw_json"] or "{}"),
             "negative": json.loads(row["negative_json"] or "{}"),
+            "params": json.loads(row["params_json"] or "{}"),
+            "has_thumbnail": row["thumbnail_png"] is not None,
+            "thumbnail_width": row["thumbnail_width"],
+            "thumbnail_height": row["thumbnail_height"],
             "hash": row["hash"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],

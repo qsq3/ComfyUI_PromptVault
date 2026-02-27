@@ -146,24 +146,83 @@ function openManager() {
       alert(`\u590d\u5236\u5931\u8d25: ${error}`);
     }
   });
-  const pre = create("pre", { class: "pv-pre", text: "\u9009\u62e9\u8bb0\u5f55\u67e5\u770b\u9884\u89c8\u3002" });
+  const detailBody = create("div", { class: "pv-detail-body" }, [
+    create("div", { class: "pv-empty", text: "\u9009\u62e9\u8bb0\u5f55\u67e5\u770b\u9884\u89c8\u3002" }),
+  ]);
   const detailHeader = create("div", { class: "pv-detail-header" }, [
     create("div", { class: "pv-detail-title", text: "\u8be6\u60c5 / \u9884\u89c8" }),
     buttonCopyPositive,
   ]);
-  const detail = create("div", { class: "pv-detail" }, [detailHeader, pre]);
+  const detail = create("div", { class: "pv-detail" }, [detailHeader, detailBody]);
   const body = create("div", { class: "pv-body" }, [list, detail]);
 
   function renderDetail(entry, assembled) {
     currentPositive = assembled.positive || "";
-    pre.textContent =
-      `\u6807\u9898: ${entry.title || ""}\n` +
-      `ID: ${entry.id}\n` +
-      `\u6807\u7b7e: ${(entry.tags || []).join(", ")}\n` +
-      `\u6a21\u578b: ${(entry.model_scope || []).join(", ")}\n` +
-      `\u7248\u672c: ${entry.version || 1}\n\n` +
-      `\u6b63\u5411:\n${assembled.positive || ""}\n\n` +
-      `\u8d1f\u5411:\n${assembled.negative || ""}\n`;
+    const params = entry.params || {};
+    const tableRows = [
+      ["\u6807\u9898", entry.title || ""],
+      ["ID", entry.id || ""],
+      ["\u6807\u7b7e", (entry.tags || []).join(", ")],
+      ["\u6a21\u578b", (entry.model_scope || []).join(", ")],
+      ["\u7248\u672c", String(entry.version || 1)],
+      { k1: "steps", v1: String(params.steps ?? ""), k2: "cfg", v2: String(params.cfg ?? "") },
+      { k1: "sampler", v1: String(params.sampler ?? ""), k2: "scheduler", v2: String(params.scheduler ?? "") },
+      ["seed", String(params.seed ?? "")],
+    ];
+
+    const table = create("table", { class: "pv-param-table" });
+    const colgroup = create("colgroup", {}, [
+      create("col", { class: "pv-col-k1" }),
+      create("col", { class: "pv-col-v1" }),
+      create("col", { class: "pv-col-k2" }),
+      create("col", { class: "pv-col-v2" }),
+    ]);
+    const tbody = create("tbody");
+    tableRows.forEach((row) => {
+      if (Array.isArray(row)) {
+        const [k, v] = row;
+        const tr = create("tr", {}, [
+          create("th", { text: k }),
+          create("td", { text: v, colspan: "3" }),
+        ]);
+        tbody.appendChild(tr);
+        return;
+      }
+      const tr = create("tr", { class: "pv-param-row-2col" }, [
+        create("th", { text: row.k1 }),
+        create("td", { text: row.v1 }),
+        create("th", { text: row.k2 }),
+        create("td", { text: row.v2 }),
+      ]);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(colgroup);
+    table.appendChild(tbody);
+
+    const thumb = create("img", {
+      class: "pv-thumb",
+      alt: "thumbnail",
+      src: entry.thumbnail_data_url || `/promptvault/entries/${encodeURIComponent(entry.id)}/thumbnail?ts=${Date.now()}`,
+    });
+    thumb.onerror = () => {
+      thumb.replaceWith(create("div", { class: "pv-empty", text: "\u6682\u65e0\u7f29\u7565\u56fe" }));
+    };
+
+    const prompts = create("div", { class: "pv-prompt-grid" }, [
+      create("div", { class: "pv-prompt-box" }, [
+        create("div", { class: "pv-detail-title", text: "\u6b63\u5411\u63d0\u793a\u8bcd" }),
+        create("pre", { class: "pv-pre", text: assembled.positive || "" }),
+      ]),
+      create("div", { class: "pv-prompt-box" }, [
+        create("div", { class: "pv-detail-title", text: "\u8d1f\u5411\u63d0\u793a\u8bcd" }),
+        create("pre", { class: "pv-pre", text: assembled.negative || "" }),
+      ]),
+    ]);
+
+    detailBody.textContent = "";
+    detailBody.appendChild(thumb);
+    detailBody.appendChild(table);
+    detailBody.appendChild(prompts);
   }
 
   function openEditor(entry) {
