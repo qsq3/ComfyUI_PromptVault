@@ -129,9 +129,11 @@
   grid-template-columns: 1.4fr 1.2fr;
 }
 .pv-sidebar {
+  display: flex;
+  flex-direction: column;
   border-right: 1px solid rgba(255, 255, 255, 0.1);
   padding: 8px 10px;
-  overflow: auto;
+  overflow: hidden;
   font-size: 12px;
 }
 .pv-sidebar-header {
@@ -149,6 +151,17 @@
 .pv-sidebar-tidy-btn {
   padding-inline: 6px;
   font-size: 11px;
+}
+.pv-sidebar-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.pv-sidebar-list {
+  flex: 1;
+  overflow-y: auto;
 }
 .pv-sidebar-item {
   padding: 4px 6px;
@@ -273,6 +286,15 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.pv-prompt-box-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.pv-copy-btn {
+  font-size: 11px;
+  padding: 2px 8px;
 }
 .pv-row {
   display: flex;

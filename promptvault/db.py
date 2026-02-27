@@ -492,22 +492,9 @@ class PromptVaultStore:
                     conn.execute("DELETE FROM tags WHERE name = ?", (name,))
                     removed += 1
 
-            # 2) 补充缺失标签
-            rows = conn.execute("SELECT tags_json, created_at FROM entries").fetchall()
-            tags_in_entries = set()
-            for r in rows:
-                try:
-                    tags = json.loads(r["tags_json"] or "[]")
-                except Exception:
-                    tags = []
-                for t in tags or []:
-                    if not t:
-                        continue
-                    tags_in_entries.add(str(t))
-
             existing_rows = conn.execute("SELECT name FROM tags").fetchall()
             existing = {r["name"] for r in existing_rows}
-            missing = sorted(tags_in_entries - existing)
+            missing = sorted(used_tags - existing)
             now = now_iso()
             added = 0
             for name in missing:

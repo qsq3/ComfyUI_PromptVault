@@ -272,20 +272,44 @@ function openManager() {
         updateSidebarActive(allRow);
         reloadList().catch((e) => alert(String(e)));
       });
-      sidebar.appendChild(headerRow);
-      sidebar.appendChild(allRow);
-      items.forEach((t) => {
-        const name = t.name || "";
-        if (!name) return;
-        const row = create("div", { class: "pv-sidebar-item", text: name });
-        row.addEventListener("click", () => {
-          selectedTag = name;
-          inputTags.value = name;
-          updateSidebarActive(row);
-          reloadList().catch((e) => alert(String(e)));
-        });
-        sidebar.appendChild(row);
+      const tagSearchInput = create("input", {
+        class: "pv-input pv-sidebar-search",
+        placeholder: "搜索标签…",
       });
+
+      const tagListContainer = create("div", { class: "pv-sidebar-list" });
+
+      function renderTagItems(filter) {
+        tagListContainer.textContent = "";
+        tagListContainer.appendChild(allRow);
+        const kw = (filter || "").trim().toLowerCase();
+        let count = 0;
+        items.forEach((t) => {
+          const name = t.name || "";
+          if (!name) return;
+          if (kw && !name.toLowerCase().includes(kw)) return;
+          count++;
+          const row = create("div", { class: "pv-sidebar-item", text: name });
+          if (name === selectedTag) row.classList.add("pv-sidebar-item-active");
+          row.addEventListener("click", () => {
+            selectedTag = name;
+            inputTags.value = name;
+            updateSidebarActive(row);
+            reloadList().catch((e) => alert(String(e)));
+          });
+          tagListContainer.appendChild(row);
+        });
+        if (kw && count === 0) {
+          tagListContainer.appendChild(create("div", { class: "pv-empty", text: "无匹配标签" }));
+        }
+      }
+
+      tagSearchInput.addEventListener("input", () => renderTagItems(tagSearchInput.value));
+
+      sidebar.appendChild(headerRow);
+      sidebar.appendChild(tagSearchInput);
+      sidebar.appendChild(tagListContainer);
+      renderTagItems("");
     } catch (e) {
       sidebar.textContent = "";
       sidebar.appendChild(create("div", { class: "pv-empty", text: `标签加载失败: ${e}` }));
@@ -352,13 +376,36 @@ function openManager() {
       thumb.replaceWith(create("div", { class: "pv-empty", text: "\u6682\u65e0\u7f29\u7565\u56fe" }));
     };
 
+    const btnCopyPos = create("button", { class: "pv-btn pv-small pv-copy-btn", text: "复制" });
+    btnCopyPos.addEventListener("click", async () => {
+      try {
+        await copyTextToClipboard(assembled.positive || "");
+        btnCopyPos.textContent = "已复制";
+        setTimeout(() => { btnCopyPos.textContent = "复制"; }, 1500);
+      } catch (e) { alert(`复制失败: ${e}`); }
+    });
+    const btnCopyNeg = create("button", { class: "pv-btn pv-small pv-copy-btn", text: "复制" });
+    btnCopyNeg.addEventListener("click", async () => {
+      try {
+        await copyTextToClipboard(assembled.negative || "");
+        btnCopyNeg.textContent = "已复制";
+        setTimeout(() => { btnCopyNeg.textContent = "复制"; }, 1500);
+      } catch (e) { alert(`复制失败: ${e}`); }
+    });
+
     const prompts = create("div", { class: "pv-prompt-grid" }, [
       create("div", { class: "pv-prompt-box" }, [
-        create("div", { class: "pv-detail-title", text: "\u6b63\u5411\u63d0\u793a\u8bcd" }),
+        create("div", { class: "pv-prompt-box-header" }, [
+          create("div", { class: "pv-detail-title", text: "正向提示词" }),
+          btnCopyPos,
+        ]),
         create("pre", { class: "pv-pre", text: assembled.positive || "" }),
       ]),
       create("div", { class: "pv-prompt-box" }, [
-        create("div", { class: "pv-detail-title", text: "\u8d1f\u5411\u63d0\u793a\u8bcd" }),
+        create("div", { class: "pv-prompt-box-header" }, [
+          create("div", { class: "pv-detail-title", text: "负向提示词" }),
+          btnCopyNeg,
+        ]),
         create("pre", { class: "pv-pre", text: assembled.negative || "" }),
       ]),
     ]);
@@ -488,7 +535,7 @@ function openManager() {
       };
       const tagsText = (item.tags || []).join(", ");
       const timeText = formatTimestamp(item.updated_at);
-      const subText = tagsText ? `${tagsText}  ·  ${timeText}` : timeText;
+      const subText = tagsText ? `标签: ${tagsText}  ·  ${timeText}` : timeText;
       const left = create("div", { class: "pv-row-left" }, [
         thumb,
         create("div", { class: "pv-row-title", text: item.title || "(untitled)" }),
