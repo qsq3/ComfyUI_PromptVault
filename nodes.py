@@ -1,7 +1,5 @@
-import json
-
-from .promptvault.db import PromptVaultStore
 from .promptvault.assemble import assemble_entry
+from .promptvault.db import PromptVaultStore
 
 
 class PromptVaultQueryNode:
@@ -10,57 +8,51 @@ class PromptVaultQueryNode:
         return {
             "required": {
                 "query": ("STRING", {"default": "", "multiline": False}),
+                "title": ("STRING", {"default": "", "multiline": False}),
                 "tags": ("STRING", {"default": "", "multiline": False}),
                 "model": ("STRING", {"default": "", "multiline": False}),
                 "top_k": ("INT", {"default": 1, "min": 1, "max": 50, "step": 1}),
-                "variables_json": ("STRING", {"default": "{}", "multiline": True}),
             }
         }
 
-    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("positive_prompt", "negative_prompt", "entry_id", "meta_json")
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("positive_prompt", "negative_prompt")
     FUNCTION = "run"
     CATEGORY = "提示词库"
 
-    def run(self, query, tags, model, top_k, variables_json):
-        try:
-            variables = json.loads(variables_json) if variables_json.strip() else {}
-            if not isinstance(variables, dict):
-                raise ValueError("variables_json must be a JSON object")
-        except Exception as e:
-            meta = {"error": f"variables_json 解析失败: {e}"}
-            return ("", "", "", json.dumps(meta, ensure_ascii=False))
-
+    def run(self, query, title, tags, model, top_k):
         store = PromptVaultStore.get()
         tag_list = [t.strip() for t in (tags or "").split(",") if t.strip()]
+        title_kw = (title or "").strip()
+        query_kw = (query or "").strip()
+
+        # If title is provided, include it in the FTS query to improve hit quality.
+        search_q = query_kw
+        if title_kw:
+            search_q = f"{title_kw} {query_kw}".strip()
 
         hits = store.search_entries(
-            q=query or "",
+            q=search_q,
             tags=tag_list,
             model=model or "",
             status="active",
             limit=max(1, int(top_k)),
         )
 
+        if title_kw and hits:
+            lower_title = title_kw.lower()
+            title_hits = [h for h in hits if lower_title in (h.get("title", "").lower())]
+            if title_hits:
+                hits = title_hits
+
         if not hits:
-            meta = {"warning": "未找到匹配提示词", "query": query, "tags": tag_list, "model": model}
-            return ("", "", "", json.dumps(meta, ensure_ascii=False))
+            return ("", "")
 
         entry = store.get_entry(hits[0]["id"])
-        assembled = assemble_entry(store=store, entry=entry, variables_override=variables)
-
-        meta = {
-            "id": entry["id"],
-            "title": entry.get("title", ""),
-            "tags": entry.get("tags", []),
-            "version": entry.get("version", 1),
-            "trace": assembled.get("trace", []),
-        }
+        assembled = assemble_entry(store=store, entry=entry, variables_override={})
         return (
             assembled.get("positive", ""),
             assembled.get("negative", ""),
-            entry["id"],
-            json.dumps(meta, ensure_ascii=False),
         )
 
 
@@ -71,4 +63,3 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptVaultQuery": "提示词库检索",
 }
-

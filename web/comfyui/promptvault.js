@@ -301,6 +301,7 @@ function openManager() {
           node.pos = [240, 120];
           node.widgets?.forEach((widget) => {
             if (widget.name === "query") widget.value = "";
+            if (widget.name === "title") widget.value = item.title || "";
             if (widget.name === "tags") widget.value = (item.tags || []).join(",");
             if (widget.name === "model") widget.value = (item.model_scope || []).join(",");
             if (widget.name === "top_k") widget.value = 1;
