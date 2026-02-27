@@ -357,7 +357,16 @@ function openManager() {
             return;
           }
 
-          node.pos = [240, 120];
+          const canvas = app.canvas;
+          const ds = canvas?.ds;
+          const scale = ds?.scale || 1;
+          const offset = ds?.offset || [0, 0];
+          const canvasEl = canvas?.canvas;
+          const viewW = canvasEl?.width || 1200;
+          const viewH = canvasEl?.height || 800;
+          const centerX = viewW * 0.5 / scale - offset[0];
+          const centerY = viewH * 0.5 / scale - offset[1];
+          node.pos = [Math.round(centerX), Math.round(centerY)];
           node.widgets?.forEach((widget) => {
             if (widget.name === "query") widget.value = "";
             if (widget.name === "title") widget.value = item.title || "";
