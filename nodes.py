@@ -633,39 +633,102 @@ class PromptVaultQueryNode:
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("positive_prompt", "negative_prompt")
     FUNCTION = "run"
-    CATEGORY = "提示词库"
+    CATEGORY = "????"
+    CATEGORY = "PromptVault"
 
     def run(self, query, title, tags, model, top_k):
         store = PromptVaultStore.get()
         tag_list = [t.strip() for t in (tags or "").split(",") if t.strip()]
         title_kw = (title or "").strip()
         query_kw = (query or "").strip()
+        print(
+            "[PromptVaultQuery][DEBUG] input:",
+            {
+                "query": query_kw,
+                "title": title_kw,
+                "tags": tag_list,
+                "model": model or "",
+                "top_k": int(top_k),
+            },
+        )
 
         search_q = query_kw
         if title_kw:
             search_q = f"{title_kw} {query_kw}".strip()
 
-        hits = store.search_entries(
-            q=search_q,
-            tags=tag_list,
-            model=model or "",
-            status="active",
-            limit=max(1, int(top_k)),
-        )
+        limit = max(1, int(top_k))
+
+        def _do_search(qv, tags_v, model_v, stage):
+            try:
+                rows = store.search_entries(
+                    q=qv,
+                    tags=tags_v,
+                    model=model_v,
+                    status="active",
+                    limit=limit,
+                )
+                print(
+                    f"[PromptVaultQuery][DEBUG] stage={stage} hits={len(rows)} q={qv!r} tags={tags_v} model={model_v!r}"
+                )
+                return rows
+            except Exception as exc:
+                print(f"[PromptVaultQuery][ERROR] stage={stage} search failed: {exc}")
+                return []
+
+        # Progressive relaxation to avoid over-filtering by model/tags.
+        hits = _do_search(search_q, tag_list, model or "", "strict")
+        if not hits and (tag_list or (model or "").strip()):
+            hits = _do_search(search_q, tag_list, "", "drop_model")
+        if not hits and tag_list:
+            hits = _do_search(search_q, [], model or "", "drop_tags")
+        if not hits and (tag_list or (model or "").strip()):
+            hits = _do_search(search_q, [], "", "q_only")
+        if not hits and title_kw and query_kw:
+            hits = _do_search(query_kw, [], "", "query_only")
+        if not hits and title_kw:
+            hits = _do_search(title_kw, [], "", "title_only")
+        if not hits:
+            hits = _do_search("", [], "", "latest_active")
 
         if title_kw and hits:
             lower_title = title_kw.lower()
             title_hits = [h for h in hits if lower_title in (h.get("title", "").lower())]
             if title_hits:
                 hits = title_hits
+                print(f"[PromptVaultQuery][DEBUG] title_filtered_hits={len(hits)}")
 
         if not hits:
             return ("", "")
 
-        entry = store.get_entry(hits[0]["id"])
-        assembled = assemble_entry(store=store, entry=entry, variables_override={})
-        return (assembled.get("positive", ""), assembled.get("negative", ""))
+        entry_id = hits[0].get("id")
+        if not entry_id:
+            print("[PromptVaultQuery][WARN] first hit has no id")
+            return ("", "")
 
+        try:
+            entry = store.get_entry(entry_id)
+        except Exception as exc:
+            print(f"[PromptVaultQuery][ERROR] get_entry failed: {exc}")
+            return ("", "")
+        print(
+            "[PromptVaultQuery][DEBUG] selected_entry:",
+            {"id": entry.get("id"), "title": entry.get("title"), "version": entry.get("version")},
+        )
+
+        try:
+            assembled = assemble_entry(store=store, entry=entry, variables_override={})
+            print(
+                "[PromptVaultQuery][DEBUG] assembled_len:",
+                {"positive": len(str(assembled.get("positive", "") or "")), "negative": len(str(assembled.get("negative", "") or ""))},
+            )
+            return (
+                str(assembled.get("positive", "") or ""),
+                str(assembled.get("negative", "") or ""),
+            )
+        except Exception as exc:
+            print(f"[PromptVaultQuery][WARN] assemble failed, fallback raw: {exc}")
+            raw = entry.get("raw", {}) if isinstance(entry, dict) else {}
+            return (str(raw.get("positive", "") or ""), str(raw.get("negative", "") or ""))
 
 class PromptVaultSaveNode:
     @classmethod
@@ -689,6 +752,7 @@ class PromptVaultSaveNode:
     RETURN_NAMES = ("entry_id", "status")
     FUNCTION = "run"
     OUTPUT_NODE = True
+    CATEGORY = "PromptVault"
     CATEGORY = "提示词库"
 
     def run(self, image, title, tags="", model="", prompt=None, extra_pnginfo=None):
@@ -771,6 +835,11 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "PromptVaultQuery": "提示词库检索",
-    "PromptVaultSave": "提示词库保存",
+    "PromptVaultQuery": "??????",
+    "PromptVaultSave": "??????",
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "PromptVaultQuery": "PromptVault Query",
+    "PromptVaultSave": "PromptVault Save",
 }

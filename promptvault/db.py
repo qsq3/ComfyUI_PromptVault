@@ -426,6 +426,10 @@ class PromptVaultStore:
         tags = normalize_tags(tags or [])
         q = normalize_text(q)
         model = normalize_text(model)
+        print(
+            "[PromptVaultDB][DEBUG] search_entries input:",
+            {"q": q, "tags": tags, "model": model, "status": status, "limit": int(limit), "offset": int(offset)},
+        )
 
         conn = self._connect()
         try:
@@ -449,7 +453,27 @@ class PromptVaultStore:
                 ORDER BY bm25(entries_fts) ASC, e.updated_at DESC
                 LIMIT ? OFFSET ?
                 """
-                rows = conn.execute(sql, params + [q, int(limit), int(offset)]).fetchall()
+                try:
+                    rows = conn.execute(sql, params + [q, int(limit), int(offset)]).fetchall()
+                    print(f"[PromptVaultDB][DEBUG] FTS rows={len(rows)}")
+                except sqlite3.OperationalError:
+                    # FTS query syntax can fail on unescaped special chars.
+                    print("[PromptVaultDB][WARN] FTS failed, fallback to LIKE")
+                    like_where = list(where)
+                    like_where.append("(e.title LIKE ? OR e.raw_json LIKE ? OR e.negative_json LIKE ?)")
+                    like_q = f"%{q}%"
+                    sql_like = f"""
+                    SELECT e.id, e.title, e.tags_json, e.model_scope_json, e.updated_at
+                    FROM entries e
+                    WHERE {' AND '.join(like_where)}
+                    ORDER BY e.updated_at DESC
+                    LIMIT ? OFFSET ?
+                    """
+                    rows = conn.execute(
+                        sql_like,
+                        params + [like_q, like_q, like_q, int(limit), int(offset)],
+                    ).fetchall()
+                    print(f"[PromptVaultDB][DEBUG] LIKE rows={len(rows)}")
             else:
                 sql = f"""
                 SELECT e.id, e.title, e.tags_json, e.model_scope_json, e.updated_at
@@ -459,6 +483,7 @@ class PromptVaultStore:
                 LIMIT ? OFFSET ?
                 """
                 rows = conn.execute(sql, params + [int(limit), int(offset)]).fetchall()
+                print(f"[PromptVaultDB][DEBUG] no-q rows={len(rows)}")
 
             items = []
             for r in rows:
@@ -471,6 +496,7 @@ class PromptVaultStore:
                         "updated_at": r["updated_at"],
                     }
                 )
+            print(f"[PromptVaultDB][DEBUG] return_items={len(items)}")
             return items
         finally:
             conn.close()
