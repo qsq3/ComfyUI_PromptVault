@@ -17,6 +17,25 @@ function create(tag, attrs = {}, children = []) {
   return element;
 }
 
+// 时间格式化：后端以 UTC ISO 存储，这里按浏览器本地时区显示「YYYY-MM-DD HH:mm:ss」
+function formatTimestamp(raw) {
+  if (!raw) return "";
+  try {
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return String(raw);
+    const pad = (n) => String(n).padStart(2, "0");
+    const y = d.getFullYear();
+    const m = pad(d.getMonth() + 1);
+    const day = pad(d.getDate());
+    const h = pad(d.getHours());
+    const min = pad(d.getMinutes());
+    const s = pad(d.getSeconds());
+    return `${y}-${m}-${day} ${h}:${min}:${s}`;
+  } catch {
+    return String(raw);
+  }
+}
+
 function parseCommaList(value) {
   return (value || "")
     .replace(/[，、]/g, ",")
@@ -121,16 +140,39 @@ function openManager() {
     role: "dialog",
     "aria-label": "\u63d0\u793a\u8bcd\u5e93\u7ba1\u7406\u5668",
   });
-  const title = create("div", { class: "pv-title", text: "\u63d0\u793a\u8bcd\u5e93\u7ba1\u7406\u5668" });
+  const titleLabel = create("span", { text: "\u63d0\u793a\u8bcd\u5e93\u7ba1\u7406\u5668" });
 
   const inputQuery = create("input", { class: "pv-input", placeholder: "\u5173\u952e\u8bcd\uff08\u6807\u9898/\u5185\u5bb9/\u6807\u7b7e\uff09" });
   const inputTags = create("input", { class: "pv-input", placeholder: "\u6807\u7b7e\uff08\u9017\u53f7\u5206\u9694\uff0c\u53ef\u9009\uff09" });
   const inputModel = create("input", { class: "pv-input", placeholder: "\u6a21\u578b\uff08\u5982 SDXL / Flux\uff0c\u53ef\u9009\uff09" });
+  const selectStatus = create(
+    "select",
+    { class: "pv-input pv-select-status", title: "\u72b6\u6001" },
+    [
+      create("option", { value: "active", text: "\u6b63\u5e38" }),
+      create("option", { value: "deleted", text: "\u56de\u6536\u7ad9" }),
+    ],
+  );
   const buttonSearch = create("button", { class: "pv-btn pv-primary", text: "\u68c0\u7d22" });
+  const buttonPurge = create("button", { class: "pv-btn pv-danger", text: "\u6e05\u7a7a\u56de\u6536\u7ad9" });
   const buttonNew = create("button", { class: "pv-btn", text: "\u65b0\u5efa" });
+  const buttonToggleSidebar = create("button", { class: "pv-btn", text: "\u6807\u7b7e\u680f" });
   const buttonClose = create("button", { class: "pv-btn pv-danger", text: "\u5173\u95ed" });
-  const toolbar = create("div", { class: "pv-toolbar" }, [inputQuery, inputTags, inputModel, buttonSearch, buttonNew, buttonClose]);
+  const title = create("div", { class: "pv-title" }, [titleLabel, buttonClose]);
+  const toolbarSpacer = create("div", { class: "pv-toolbar-spacer" });
+  const toolbar = create("div", { class: "pv-toolbar" }, [
+    inputQuery,
+    inputTags,
+    inputModel,
+    buttonSearch,
+    buttonNew,
+    toolbarSpacer,
+    selectStatus,
+    buttonPurge,
+    buttonToggleSidebar,
+  ]);
 
+  const sidebar = create("div", { class: "pv-sidebar" });
   const list = create("div", { class: "pv-list" });
   let currentPositive = "";
   const buttonCopyPositive = create("button", { class: "pv-btn pv-small", text: "\u590d\u5236\u6b63\u5411\u63d0\u793a\u8bcd" });
@@ -154,10 +196,112 @@ function openManager() {
     buttonCopyPositive,
   ]);
   const detail = create("div", { class: "pv-detail" }, [detailHeader, detailBody]);
-  const body = create("div", { class: "pv-body" }, [list, detail]);
+  const body = create("div", { class: "pv-body" }, [sidebar, list, detail]);
+
+  const statusBarLeft = create("span", { class: "pv-statusbar-left", text: "\u5c31\u7eea" });
+  const statusBarRight = create("span", { class: "pv-statusbar-right", text: "" });
+  const statusBar = create("div", { class: "pv-statusbar" }, [statusBarLeft, statusBarRight]);
+
+  let selectedTag = "";
+  let currentStatus = "active";
+  let sidebarVisible = false;
+
+  // 默认关闭标签栏
+  sidebar.style.display = "none";
+  body.classList.add("pv-body-no-sidebar");
+
+  buttonToggleSidebar.addEventListener("click", () => {
+    sidebarVisible = !sidebarVisible;
+    if (sidebarVisible) {
+      sidebar.style.display = "";
+      body.classList.remove("pv-body-no-sidebar");
+    } else {
+      sidebar.style.display = "none";
+      body.classList.add("pv-body-no-sidebar");
+    }
+  });
+
+  selectStatus.addEventListener("change", () => {
+    currentStatus = selectStatus.value === "deleted" ? "deleted" : "active";
+    reloadList().catch((e) => alert(String(e)));
+  });
+
+  buttonPurge.addEventListener("click", async () => {
+    if (currentStatus !== "deleted") {
+      alert("\u8bf7\u5148\u5207\u6362\u5230\u201c\u56de\u6536\u7ad9\u201d\u72b6\u6001\u518d\u6267\u884c\u6e05\u7a7a\u3002");
+      return;
+    }
+    if (!confirm("\u786e\u5b9a\u6e05\u7a7a\u56de\u6536\u7ad9\uff1f\u6b64\u64cd\u4f5c\u4e0d\u53ef\u64a4\u56de\u3002")) return;
+    try {
+      await request("/entries/purge_deleted", { method: "POST", body: JSON.stringify({}) });
+      await reloadList();
+    } catch (error) {
+      alert(`\u6e05\u7a7a\u56de\u6536\u7ad9\u5931\u8d25: ${error}`);
+    }
+  });
+
+  async function loadTags() {
+    sidebar.textContent = "加载标签...";
+    try {
+      const res = await request("/tags?limit=200");
+      const items = res.items || [];
+      sidebar.textContent = "";
+      const headerRow = create("div", { class: "pv-sidebar-header-row" }, [
+        create("div", { class: "pv-sidebar-header", text: "标签" }),
+        create("button", { class: "pv-btn pv-small pv-sidebar-tidy-btn", text: "整理标签" }),
+      ]);
+      const tidyButton = headerRow.querySelector("button");
+      tidyButton.addEventListener("click", async () => {
+        try {
+          if (!confirm("将删除没有任何记录引用的标签，并补充缺失的标签记录。确定继续？")) return;
+          const result = await request("/tags/tidy", { method: "POST", body: JSON.stringify({}) });
+          alert(`整理完成：删除 ${result.removed || 0} 个无用标签，新增 ${result.added || 0} 个标签。`);
+          await loadTags();
+        } catch (e) {
+          alert(`整理标签失败: ${e}`);
+        }
+      });
+      const allRow = create("div", {
+        class: "pv-sidebar-item pv-sidebar-item-active",
+        text: "全部",
+      });
+      selectedTag = "";
+      allRow.addEventListener("click", () => {
+        selectedTag = "";
+        inputTags.value = "";
+        updateSidebarActive(allRow);
+        reloadList().catch((e) => alert(String(e)));
+      });
+      sidebar.appendChild(headerRow);
+      sidebar.appendChild(allRow);
+      items.forEach((t) => {
+        const name = t.name || "";
+        if (!name) return;
+        const row = create("div", { class: "pv-sidebar-item", text: name });
+        row.addEventListener("click", () => {
+          selectedTag = name;
+          inputTags.value = name;
+          updateSidebarActive(row);
+          reloadList().catch((e) => alert(String(e)));
+        });
+        sidebar.appendChild(row);
+      });
+    } catch (e) {
+      sidebar.textContent = "";
+      sidebar.appendChild(create("div", { class: "pv-empty", text: `标签加载失败: ${e}` }));
+    }
+  }
+
+  function updateSidebarActive(activeEl) {
+    sidebar.querySelectorAll(".pv-sidebar-item").forEach((el) => {
+      if (el === activeEl) el.classList.add("pv-sidebar-item-active");
+      else el.classList.remove("pv-sidebar-item-active");
+    });
+  }
 
   function renderDetail(entry, assembled) {
     currentPositive = assembled.positive || "";
+    statusBarRight.textContent = `当前: ${entry.title || "未命名"} | ID: ${(entry.id || "").slice(0, 8)}… | v${entry.version || 1}`;
     const params = entry.params || {};
     const tableRows = [
       ["\u6807\u9898", entry.title || ""],
@@ -282,13 +426,17 @@ function openManager() {
         variables,
       };
 
-      if (isNew) {
-        await request("/entries", { method: "POST", body: JSON.stringify(payload) });
-      } else {
-        await request(`/entries/${encodeURIComponent(entry.id)}`, { method: "PUT", body: JSON.stringify(payload) });
+      try {
+        if (isNew) {
+          await request("/entries", { method: "POST", body: JSON.stringify(payload) });
+        } else {
+          await request(`/entries/${encodeURIComponent(entry.id)}`, { method: "PUT", body: JSON.stringify(payload) });
+        }
+        document.body.removeChild(overlayEditor);
+        await reloadList();
+      } catch (error) {
+        alert(`保存失败: ${error}`);
       }
-      document.body.removeChild(overlayEditor);
-      await reloadList();
     });
 
     const content = create("div", { class: "pv-editor-body" }, [
@@ -315,25 +463,43 @@ function openManager() {
     if (inputQuery.value.trim()) params.set("q", inputQuery.value.trim());
     if (inputTags.value.trim()) params.set("tags", inputTags.value.trim());
     if (inputModel.value.trim()) params.set("model", inputModel.value.trim());
-    params.set("status", "active");
+    params.set("status", currentStatus);
     params.set("limit", "50");
 
     const result = await request(`/entries?${params.toString()}`);
     list.textContent = "";
-    if (!result.items?.length) {
+    const totalCount = result.items?.length || 0;
+    statusBarLeft.textContent = `共 ${totalCount} 条记录` + (currentStatus === "deleted" ? "（回收站）" : "");
+    statusBarRight.textContent = "";
+    if (!totalCount) {
       list.appendChild(create("div", { class: "pv-empty", text: "\u6ca1\u6709\u627e\u5230\u8bb0\u5f55\u3002" }));
       return;
     }
 
     for (const item of result.items) {
       const row = create("div", { class: "pv-row" });
+      const thumb = create("img", {
+        class: "pv-row-thumb",
+        alt: "thumbnail",
+        src: `/promptvault/entries/${encodeURIComponent(item.id)}/thumbnail?ts=${Date.now()}`,
+      });
+      thumb.onerror = () => {
+        thumb.style.display = "none";
+      };
+      const tagsText = (item.tags || []).join(", ");
+      const timeText = formatTimestamp(item.updated_at);
+      const subText = tagsText ? `${tagsText}  ·  ${timeText}` : timeText;
       const left = create("div", { class: "pv-row-left" }, [
+        thumb,
         create("div", { class: "pv-row-title", text: item.title || "(untitled)" }),
-        create("div", { class: "pv-row-sub", text: `标签: ${(item.tags || []).join(", ")} | ${item.updated_at || ""}` }),
+        create("div", { class: "pv-row-sub", text: subText }),
       ]);
-      const buttonNode = create("button", { class: "pv-btn pv-small", text: "\u65b0\u5efa\u68c0\u7d22\u8282\u70b9" });
+      const buttonNode = create("button", { class: "pv-btn pv-small", text: "\u65b0\u5efa\u68c0\u7d22" });
       const buttonEdit = create("button", { class: "pv-btn pv-small", text: "\u7f16\u8f91" });
-      const buttonDelete = create("button", { class: "pv-btn pv-small pv-danger", text: "\u5220\u9664" });
+      const buttonDelete = create("button", {
+        class: `pv-btn pv-small ${currentStatus === "deleted" ? "" : "pv-danger"}`,
+        text: currentStatus === "deleted" ? "\u8fd8\u539f" : "\u5220\u9664",
+      });
       const right = create("div", { class: "pv-row-right" }, [buttonNode, buttonEdit, buttonDelete]);
 
       buttonNode.addEventListener("click", () => {
@@ -344,14 +510,14 @@ function openManager() {
             return;
           }
 
-          const create = (type) => {
+          const createNode = (type) => {
             try {
               return globalThis.LiteGraph?.createNode?.(type) || null;
             } catch (_e) {
               return null;
             }
           };
-          const node = create("PromptVaultQuery") || create("提示词库检索");
+          const node = createNode("PromptVaultQuery") || createNode("提示词库检索");
           if (!node) {
             alert("未找到节点类型：PromptVaultQuery");
             return;
@@ -395,24 +561,56 @@ function openManager() {
         }
       });
       buttonDelete.addEventListener("click", async () => {
-        if (!confirm("\u786e\u5b9a\u5220\u9664\uff1f")) return;
-        await request(`/entries/${encodeURIComponent(item.id)}`, { method: "DELETE" });
-        await reloadList();
+        try {
+          if (currentStatus === "deleted") {
+            if (!confirm("\u786e\u5b9a\u8fd8\u539f\u8bb0\u5f55\uff1f")) return;
+            await request(`/entries/${encodeURIComponent(item.id)}`, {
+              method: "PUT",
+              body: JSON.stringify({ status: "active" }),
+            });
+          } else {
+            if (!confirm("\u786e\u5b9a\u5220\u9664\uff1f\u5c06\u79fb\u5165\u56de\u6536\u7ad9\u3002")) return;
+            await request(`/entries/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+          }
+          await reloadList();
+        } catch (error) {
+          alert(`\u66f4\u65b0\u72b6\u6001\u5931\u8d25: ${error}`);
+        }
       });
 
       row.addEventListener("click", async (event) => {
         if (event.target === buttonNode || event.target === buttonEdit || event.target === buttonDelete) return;
-        const full = await request(`/entries/${encodeURIComponent(item.id)}`);
-        const assembled = await request("/assemble", {
-          method: "POST",
-          body: JSON.stringify({ entry_id: item.id, variables_override: {} }),
-        });
-        renderDetail(full, assembled);
+        try {
+          list.querySelectorAll(".pv-row-active").forEach((el) => el.classList.remove("pv-row-active"));
+          row.classList.add("pv-row-active");
+          const full = await request(`/entries/${encodeURIComponent(item.id)}`);
+          const assembled = await request("/assemble", {
+            method: "POST",
+            body: JSON.stringify({ entry_id: item.id, variables_override: {} }),
+          });
+          renderDetail(full, assembled);
+        } catch (error) {
+          alert(`加载详情失败: ${error}`);
+        }
       });
 
       row.appendChild(left);
       row.appendChild(right);
       list.appendChild(row);
+    }
+
+    const firstItem = result.items[0];
+    if (firstItem?.id) {
+      try {
+        const full = await request(`/entries/${encodeURIComponent(firstItem.id)}`);
+        const assembled = await request("/assemble", {
+          method: "POST",
+          body: JSON.stringify({ entry_id: firstItem.id, variables_override: {} }),
+        });
+        renderDetail(full, assembled);
+        const firstRow = list.querySelector(".pv-row");
+        if (firstRow) firstRow.classList.add("pv-row-active");
+      } catch (_e) { /* ignore */ }
     }
   }
 
@@ -426,8 +624,13 @@ function openManager() {
   modal.appendChild(title);
   modal.appendChild(toolbar);
   modal.appendChild(body);
+  modal.appendChild(statusBar);
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
+  loadTags().catch((e) => {
+    sidebar.textContent = "";
+    sidebar.appendChild(create("div", { class: "pv-empty", text: `标签加载失败: ${e}` }));
+  });
   reloadList().catch((e) => {
     list.textContent = "";
     list.appendChild(create("div", { class: "pv-empty", text: `Error: ${e}` }));

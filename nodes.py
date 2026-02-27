@@ -1,8 +1,11 @@
 import io
 import json
+import logging
 import os
 import re
 from pathlib import Path
+
+logger = logging.getLogger("PromptVault")
 
 import numpy as np
 from PIL import Image
@@ -590,27 +593,15 @@ def _debug_dump_png_meta(
 ):
     try:
         keys = list(extra_pnginfo.keys()) if isinstance(extra_pnginfo, dict) else []
-        print("[PromptVaultSave][DEBUG] extra_pnginfo keys:", keys)
-        print("[PromptVaultSave][DEBUG] prompt_from_png found:", bool(prompt_from_png))
-        print(
-            "[PromptVaultSave][DEBUG] workflow_data:",
-            json.dumps(workflow_data, ensure_ascii=False, default=str),
-        )
-        print(
-            "[PromptVaultSave][DEBUG] png_meta_data:",
-            json.dumps(png_meta_data, ensure_ascii=False, default=str),
-        )
-        print("[PromptVaultSave][DEBUG] source_image_paths:", image_meta_paths)
-        print(
-            "[PromptVaultSave][DEBUG] source_image_meta_data:",
-            json.dumps(image_meta_data, ensure_ascii=False, default=str),
-        )
-        print(
-            "[PromptVaultSave][DEBUG] final_generation_data:",
-            json.dumps(final_data, ensure_ascii=False, default=str),
-        )
+        logger.debug("extra_pnginfo keys: %s", keys)
+        logger.debug("prompt_from_png found: %s", bool(prompt_from_png))
+        logger.debug("workflow_data: %s", json.dumps(workflow_data, ensure_ascii=False, default=str))
+        logger.debug("png_meta_data: %s", json.dumps(png_meta_data, ensure_ascii=False, default=str))
+        logger.debug("source_image_paths: %s", image_meta_paths)
+        logger.debug("source_image_meta_data: %s", json.dumps(image_meta_data, ensure_ascii=False, default=str))
+        logger.debug("final_generation_data: %s", json.dumps(final_data, ensure_ascii=False, default=str))
     except Exception as exc:
-        print(f"[PromptVaultSave][DEBUG] dump failed: {exc}")
+        logger.debug("dump failed: %s", exc)
 
 
 def _first_five_chars(text):
@@ -627,30 +618,28 @@ class PromptVaultQueryNode:
                 "tags": ("STRING", {"default": "", "multiline": False}),
                 "model": ("STRING", {"default": "", "multiline": False}),
                 "top_k": ("INT", {"default": 1, "min": 1, "max": 50, "step": 1}),
+                "variables_json": ("STRING", {"default": "{}", "multiline": True}),
             }
         }
 
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("positive_prompt", "negative_prompt")
     FUNCTION = "run"
-    CATEGORY = "????"
     CATEGORY = "PromptVault"
 
-    def run(self, query, title, tags, model, top_k):
+    def run(self, query, title, tags, model, top_k, variables_json="{}"):
         store = PromptVaultStore.get()
         tag_list = [t.strip() for t in (tags or "").split(",") if t.strip()]
         title_kw = (title or "").strip()
         query_kw = (query or "").strip()
-        print(
-            "[PromptVaultQuery][DEBUG] input:",
-            {
-                "query": query_kw,
-                "title": title_kw,
-                "tags": tag_list,
-                "model": model or "",
-                "top_k": int(top_k),
-            },
-        )
+
+        variables_override = {}
+        try:
+            parsed = json.loads(variables_json or "{}")
+            if isinstance(parsed, dict):
+                variables_override = parsed
+        except Exception:
+            pass
 
         search_q = query_kw
         if title_kw:
@@ -667,12 +656,10 @@ class PromptVaultQueryNode:
                     status="active",
                     limit=limit,
                 )
-                print(
-                    f"[PromptVaultQuery][DEBUG] stage={stage} hits={len(rows)} q={qv!r} tags={tags_v} model={model_v!r}"
-                )
+                logger.debug("stage=%s hits=%d q=%r tags=%s model=%r", stage, len(rows), qv, tags_v, model_v)
                 return rows
             except Exception as exc:
-                print(f"[PromptVaultQuery][ERROR] stage={stage} search failed: {exc}")
+                logger.error("stage=%s search failed: %s", stage, exc)
                 return []
 
         # Progressive relaxation to avoid over-filtering by model/tags.
@@ -695,38 +682,35 @@ class PromptVaultQueryNode:
             title_hits = [h for h in hits if lower_title in (h.get("title", "").lower())]
             if title_hits:
                 hits = title_hits
-                print(f"[PromptVaultQuery][DEBUG] title_filtered_hits={len(hits)}")
+                logger.debug("title_filtered_hits=%d", len(hits))
 
         if not hits:
             return ("", "")
 
         entry_id = hits[0].get("id")
         if not entry_id:
-            print("[PromptVaultQuery][WARN] first hit has no id")
+            logger.warning("first hit has no id")
             return ("", "")
 
         try:
             entry = store.get_entry(entry_id)
         except Exception as exc:
-            print(f"[PromptVaultQuery][ERROR] get_entry failed: {exc}")
+            logger.error("get_entry failed: %s", exc)
             return ("", "")
-        print(
-            "[PromptVaultQuery][DEBUG] selected_entry:",
-            {"id": entry.get("id"), "title": entry.get("title"), "version": entry.get("version")},
-        )
+        logger.debug("selected_entry: id=%s title=%s version=%s",
+                      entry.get("id"), entry.get("title"), entry.get("version"))
 
         try:
-            assembled = assemble_entry(store=store, entry=entry, variables_override={})
-            print(
-                "[PromptVaultQuery][DEBUG] assembled_len:",
-                {"positive": len(str(assembled.get("positive", "") or "")), "negative": len(str(assembled.get("negative", "") or ""))},
-            )
+            assembled = assemble_entry(store=store, entry=entry, variables_override=variables_override)
+            logger.debug("assembled_len: positive=%d negative=%d",
+                         len(str(assembled.get("positive", "") or "")),
+                         len(str(assembled.get("negative", "") or "")))
             return (
                 str(assembled.get("positive", "") or ""),
                 str(assembled.get("negative", "") or ""),
             )
         except Exception as exc:
-            print(f"[PromptVaultQuery][WARN] assemble failed, fallback raw: {exc}")
+            logger.warning("assemble failed, fallback raw: %s", exc)
             raw = entry.get("raw", {}) if isinstance(entry, dict) else {}
             return (str(raw.get("positive", "") or ""), str(raw.get("negative", "") or ""))
 
@@ -753,7 +737,6 @@ class PromptVaultSaveNode:
     FUNCTION = "run"
     OUTPUT_NODE = True
     CATEGORY = "PromptVault"
-    CATEGORY = "提示词库"
 
     def run(self, image, title, tags="", model="", prompt=None, extra_pnginfo=None):
         try:
@@ -835,11 +818,6 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "PromptVaultQuery": "??????",
-    "PromptVaultSave": "??????",
-}
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "PromptVaultQuery": "PromptVault Query",
-    "PromptVaultSave": "PromptVault Save",
+    "PromptVaultQuery": "提示词库检索",
+    "PromptVaultSave": "提示词库保存",
 }

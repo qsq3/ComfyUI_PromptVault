@@ -115,11 +115,9 @@ def assemble_entry(store, entry, variables_override=None, model_hint=""):
         positive = (positive + ", " + text2).strip(", ")
         trace.append({"type": "fragment_resolved", "ref": ref, "text": text2})
 
-    # Simple variable expansion for raw prompt if user includes {var}
-    try:
-        positive = positive.format(**variables)
-        negative = negative.format(**variables)
-    except Exception as e:
-        trace.append({"type": "format_warning", "error": str(e)})
+    for k, v in variables.items():
+        placeholder = "{" + str(k) + "}"
+        positive = positive.replace(placeholder, str(v))
+        negative = negative.replace(placeholder, str(v))
 
     return {"positive": positive, "negative": negative, "trace": trace}

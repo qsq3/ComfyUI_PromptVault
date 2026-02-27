@@ -1,10 +1,12 @@
+import logging
+
 from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS  # noqa: F401
 
-# ComfyUI will serve files from this directory under /extensions/<folder_name>/
 WEB_DIRECTORY = "./web/comfyui"
 
+_logger = logging.getLogger("PromptVault")
+
 def _try_register_routes():
-    # Allow importing this package outside ComfyUI (e.g. tooling) without crashing.
     try:
         import server  # type: ignore  # noqa: F401
     except Exception:
@@ -15,7 +17,7 @@ def _try_register_routes():
 
         setup_routes()
     except Exception:
-        return
+        _logger.exception("PromptVault route registration failed")
 
 
 _try_register_routes()

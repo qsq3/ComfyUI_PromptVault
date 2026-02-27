@@ -43,6 +43,20 @@ def setup_routes():
         items = store.search_entries(q=q, tags=tag_list, model=model, status=status, limit=limit, offset=offset)
         return _json_response({"items": items, "limit": limit, "offset": offset})
 
+    @routes.post("/promptvault/entries/purge_deleted")
+    async def purge_deleted(_request):
+        """清空回收站：硬删除所有 status=deleted 的记录。"""
+        store = PromptVaultStore.get()
+        count = store.purge_deleted_entries()
+        return _json_response({"deleted": count})
+
+    @routes.post("/promptvault/tags/tidy")
+    async def tidy_tags(_request):
+        """整理标签：删除无记录引用的标签，补充缺失标签。"""
+        store = PromptVaultStore.get()
+        result = store.tidy_tags()
+        return _json_response(result)
+
     @routes.post("/promptvault/entries")
     async def create_entry(request):
         store = PromptVaultStore.get()

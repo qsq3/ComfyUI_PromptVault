@@ -1,8 +1,11 @@
 import json
+import logging
 import os
 import sqlite3
 import threading
 import uuid
+
+logger = logging.getLogger("PromptVault")
 
 from .paths import get_db_path
 from .schema import SCHEMA_SQL
@@ -28,6 +31,8 @@ class PromptVaultStore:
     def _connect(self):
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
         return conn
 
     def _init_db(self):
@@ -331,6 +336,16 @@ class PromptVaultStore:
                 params = payload.get("params") or {}
                 if isinstance(params, dict):
                     entry["params"] = params
+            if "status" in payload:
+                status = str(payload.get("status") or "").strip() or entry.get("status", "active")
+                entry["status"] = status
+            if "favorite" in payload:
+                entry["favorite"] = 1 if payload.get("favorite") else 0
+            if "score" in payload:
+                try:
+                    entry["score"] = float(payload.get("score", 0.0))
+                except (TypeError, ValueError):
+                    entry["score"] = 0.0
             if "thumbnail_png" in payload:
                 new_thumb = payload.get("thumbnail_png")
                 if isinstance(new_thumb, (bytes, bytearray)) and len(new_thumb) > 0:
@@ -353,6 +368,7 @@ class PromptVaultStore:
                 """
                 UPDATE entries SET
                   title=?,
+                  status=?,
                   version=?,
                   tags_json=?,
                   model_scope_json=?,
@@ -363,12 +379,15 @@ class PromptVaultStore:
                   thumbnail_png=?,
                   thumbnail_width=?,
                   thumbnail_height=?,
+                  favorite=?,
+                  score=?,
                   hash=?,
                   updated_at=?
                 WHERE id=?
                 """,
                 (
                     entry["title"],
+                    entry.get("status", "active"),
                     entry["version"],
                     json_dumps(entry["tags"]),
                     json_dumps(entry["model_scope"]),
@@ -379,6 +398,8 @@ class PromptVaultStore:
                     thumb_blob,
                     thumb_w,
                     thumb_h,
+                    entry.get("favorite", 0),
+                    entry.get("score", 0.0),
                     entry["hash"],
                     entry["updated_at"],
                     entry["id"],
@@ -422,14 +443,91 @@ class PromptVaultStore:
         finally:
             conn.close()
 
+    def purge_deleted_entries(self):
+        """硬删除所有已软删除的记录及其相关索引/版本。"""
+        conn = self._connect()
+        try:
+            # 先收集所有待删除的 entry_id，便于清理关联表
+            rows = conn.execute("SELECT id FROM entries WHERE status = 'deleted'").fetchall()
+            ids = [r["id"] for r in rows]
+            if not ids:
+                return 0
+
+            # 使用参数化的 IN 子句删除 entry_versions 和 entries_fts 中的对应记录
+            placeholders = ",".join(["?"] * len(ids))
+            conn.execute(f"DELETE FROM entry_versions WHERE entry_id IN ({placeholders})", ids)
+            conn.execute(f"DELETE FROM entries_fts WHERE entry_id IN ({placeholders})", ids)
+            conn.execute(f"DELETE FROM entries WHERE id IN ({placeholders})", ids)
+            conn.commit()
+            return len(ids)
+        finally:
+            conn.close()
+
+    def tidy_tags(self):
+        """整理标签：
+        1）删除在 entries 中已不存在的标签；
+        2）补充 entries 中出现但 tags 表中缺失的标签。
+        返回 {removed, added} 统计。
+        """
+        conn = self._connect()
+        try:
+            entry_rows = conn.execute(
+                "SELECT tags_json FROM entries WHERE status != 'deleted'"
+            ).fetchall()
+            used_tags = set()
+            for er in entry_rows:
+                try:
+                    tlist = json.loads(er["tags_json"] or "[]")
+                except Exception:
+                    tlist = []
+                for t in tlist or []:
+                    if t:
+                        used_tags.add(str(t))
+
+            rows = conn.execute("SELECT name FROM tags").fetchall()
+            all_tag_names = [r["name"] for r in rows]
+            removed = 0
+            for name in all_tag_names:
+                if name not in used_tags:
+                    conn.execute("DELETE FROM tags WHERE name = ?", (name,))
+                    removed += 1
+
+            # 2) 补充缺失标签
+            rows = conn.execute("SELECT tags_json, created_at FROM entries").fetchall()
+            tags_in_entries = set()
+            for r in rows:
+                try:
+                    tags = json.loads(r["tags_json"] or "[]")
+                except Exception:
+                    tags = []
+                for t in tags or []:
+                    if not t:
+                        continue
+                    tags_in_entries.add(str(t))
+
+            existing_rows = conn.execute("SELECT name FROM tags").fetchall()
+            existing = {r["name"] for r in existing_rows}
+            missing = sorted(tags_in_entries - existing)
+            now = now_iso()
+            added = 0
+            for name in missing:
+                conn.execute(
+                    "INSERT OR IGNORE INTO tags(name,created_at) VALUES(?,?)",
+                    (name, now),
+                )
+                added += 1
+
+            conn.commit()
+            return {"removed": removed, "added": added}
+        finally:
+            conn.close()
+
     def search_entries(self, q="", tags=None, model="", status="active", limit=20, offset=0):
         tags = normalize_tags(tags or [])
         q = normalize_text(q)
         model = normalize_text(model)
-        print(
-            "[PromptVaultDB][DEBUG] search_entries input:",
-            {"q": q, "tags": tags, "model": model, "status": status, "limit": int(limit), "offset": int(offset)},
-        )
+        logger.debug("search_entries input: q=%r tags=%s model=%r status=%r limit=%d offset=%d",
+                     q, tags, model, status, int(limit), int(offset))
 
         conn = self._connect()
         try:
@@ -455,10 +553,10 @@ class PromptVaultStore:
                 """
                 try:
                     rows = conn.execute(sql, params + [q, int(limit), int(offset)]).fetchall()
-                    print(f"[PromptVaultDB][DEBUG] FTS rows={len(rows)}")
+                    logger.debug("FTS rows=%d", len(rows))
                 except sqlite3.OperationalError:
                     # FTS query syntax can fail on unescaped special chars.
-                    print("[PromptVaultDB][WARN] FTS failed, fallback to LIKE")
+                    logger.warning("FTS failed, fallback to LIKE")
                     like_where = list(where)
                     like_where.append("(e.title LIKE ? OR e.raw_json LIKE ? OR e.negative_json LIKE ?)")
                     like_q = f"%{q}%"
@@ -473,7 +571,7 @@ class PromptVaultStore:
                         sql_like,
                         params + [like_q, like_q, like_q, int(limit), int(offset)],
                     ).fetchall()
-                    print(f"[PromptVaultDB][DEBUG] LIKE rows={len(rows)}")
+                    logger.debug("LIKE rows=%d", len(rows))
             else:
                 sql = f"""
                 SELECT e.id, e.title, e.tags_json, e.model_scope_json, e.updated_at
@@ -483,7 +581,7 @@ class PromptVaultStore:
                 LIMIT ? OFFSET ?
                 """
                 rows = conn.execute(sql, params + [int(limit), int(offset)]).fetchall()
-                print(f"[PromptVaultDB][DEBUG] no-q rows={len(rows)}")
+                logger.debug("no-q rows=%d", len(rows))
 
             items = []
             for r in rows:
@@ -496,7 +594,7 @@ class PromptVaultStore:
                         "updated_at": r["updated_at"],
                     }
                 )
-            print(f"[PromptVaultDB][DEBUG] return_items={len(items)}")
+            logger.debug("return_items=%d", len(items))
             return items
         finally:
             conn.close()
