@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -100,14 +101,23 @@ class LLMClient:
             body["model"] = model
 
         timeout = aiohttp.ClientTimeout(total=self.config.get("timeout", 30))
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                self._endpoint, json=body, headers=self._headers
-            ) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    raise RuntimeError(f"LLM 返回错误 ({resp.status}): {text[:300]}")
-                data = await resp.json()
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    self._endpoint, json=body, headers=self._headers
+                ) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        raise RuntimeError(
+                            f"LLM 返回错误 ({resp.status}): {text[:200] if text.strip() else '(空响应)'}"
+                        )
+                    data = await resp.json()
+        except aiohttp.ClientConnectorError:
+            raise RuntimeError(
+                f"无法连接 LM Studio ({self._endpoint})，请检查地址和服务状态"
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError("LLM 响应超时，请增大超时时间或检查模型是否已加载")
 
         content = ""
         try:
@@ -130,14 +140,23 @@ class LLMClient:
             body["model"] = model
 
         timeout = aiohttp.ClientTimeout(total=min(self.config.get("timeout", 30), 15))
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                self._endpoint, json=body, headers=self._headers
-            ) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    raise RuntimeError(f"连接失败 ({resp.status}): {text[:300]}")
-                data = await resp.json()
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    self._endpoint, json=body, headers=self._headers
+                ) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        raise RuntimeError(
+                            f"服务返回 {resp.status}: {text[:200] if text.strip() else '(空响应，可能模型未加载)'}"
+                        )
+                    data = await resp.json()
+        except aiohttp.ClientConnectorError:
+            raise RuntimeError(
+                f"无法连接 {self._endpoint}，请检查地址和 LM Studio 是否启动"
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError("连接超时，请检查地址或增大超时时间")
 
         resp_model = data.get("model", model or "(unknown)")
         return {"ok": True, "model": resp_model}

@@ -286,7 +286,7 @@ def setup_routes():
         try:
             tags = await client.auto_tag(positive, negative, existing_tags)
         except Exception as exc:
-            return _json_response({"error": str(exc)}, status=502)
+            return _json_response({"error": str(exc), "tags": []})
         return _json_response({"tags": tags})
 
     @routes.post("/promptvault/llm/test")
@@ -307,7 +307,7 @@ def setup_routes():
         try:
             result = await client.test_connection()
         except Exception as exc:
-            return _json_response({"ok": False, "error": str(exc)}, status=502)
+            return _json_response({"ok": False, "error": str(exc)})
         return _json_response(result)
 
     @routes.get("/promptvault/tags")
