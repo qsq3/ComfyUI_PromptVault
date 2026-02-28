@@ -17,7 +17,6 @@ function create(tag, attrs = {}, children = []) {
   return element;
 }
 
-// 时间格式化：后端以 UTC ISO 存储，这里按浏览器本地时区显示「YYYY-MM-DD HH:mm:ss」
 function formatTimestamp(raw) {
   if (!raw) return "";
   try {
@@ -58,6 +57,27 @@ async function copyTextToClipboard(text) {
   textarea.select();
   document.execCommand("copy");
   document.body.removeChild(textarea);
+}
+
+/* ── Toast notification system ── */
+let _toastContainer = null;
+function _ensureToastContainer() {
+  if (_toastContainer && document.body.contains(_toastContainer)) return _toastContainer;
+  _toastContainer = create("div", { class: "pv-toast-container" });
+  document.body.appendChild(_toastContainer);
+  return _toastContainer;
+}
+
+function toast(message, type = "info", duration = 2800) {
+  const container = _ensureToastContainer();
+  const el = create("div", { class: `pv-toast pv-toast-${type}`, text: message });
+  container.appendChild(el);
+  const remove = () => {
+    el.classList.add("pv-toast-exit");
+    el.addEventListener("animationend", () => el.remove(), { once: true });
+  };
+  const timer = setTimeout(remove, duration);
+  el.addEventListener("click", () => { clearTimeout(timer); remove(); });
 }
 
 function ensureStyle() {
@@ -131,6 +151,11 @@ function injectLegacyMenuButton(openFn) {
   return true;
 }
 
+function thumbUrl(itemId, updatedAt) {
+  const v = updatedAt ? encodeURIComponent(updatedAt) : "0";
+  return `/promptvault/entries/${encodeURIComponent(itemId)}/thumbnail?v=${v}`;
+}
+
 function openManager() {
   ensureStyle();
 
@@ -178,14 +203,14 @@ function openManager() {
   const buttonCopyPositive = create("button", { class: "pv-btn pv-small", text: "\u590d\u5236\u6b63\u5411\u63d0\u793a\u8bcd" });
   buttonCopyPositive.addEventListener("click", async () => {
     if (!currentPositive.trim()) {
-      alert("\u8bf7\u5148\u9009\u62e9\u4e00\u6761\u8bb0\u5f55");
+      toast("\u8bf7\u5148\u9009\u62e9\u4e00\u6761\u8bb0\u5f55", "info");
       return;
     }
     try {
       await copyTextToClipboard(currentPositive);
-      alert("\u5df2\u590d\u5236\u6b63\u5411\u63d0\u793a\u8bcd");
+      toast("\u5df2\u590d\u5236\u6b63\u5411\u63d0\u793a\u8bcd", "success");
     } catch (error) {
-      alert(`\u590d\u5236\u5931\u8d25: ${error}`);
+      toast(`\u590d\u5236\u5931\u8d25: ${error}`, "error");
     }
   });
   const detailBody = create("div", { class: "pv-detail-body" }, [
@@ -206,9 +231,12 @@ function openManager() {
   let currentStatus = "active";
   let sidebarVisible = false;
 
-  // 默认关闭标签栏
   sidebar.style.display = "none";
   body.classList.add("pv-body-no-sidebar");
+
+  function closeManager() {
+    if (document.body.contains(overlay)) document.body.removeChild(overlay);
+  }
 
   buttonToggleSidebar.addEventListener("click", () => {
     sidebarVisible = !sidebarVisible;
@@ -223,58 +251,59 @@ function openManager() {
 
   selectStatus.addEventListener("change", () => {
     currentStatus = selectStatus.value === "deleted" ? "deleted" : "active";
-    reloadList().catch((e) => alert(String(e)));
+    reloadList().catch((e) => toast(String(e), "error"));
   });
 
   buttonPurge.addEventListener("click", async () => {
     if (currentStatus !== "deleted") {
-      alert("\u8bf7\u5148\u5207\u6362\u5230\u201c\u56de\u6536\u7ad9\u201d\u72b6\u6001\u518d\u6267\u884c\u6e05\u7a7a\u3002");
+      toast("\u8bf7\u5148\u5207\u6362\u5230\u201c\u56de\u6536\u7ad9\u201d\u72b6\u6001\u518d\u6267\u884c\u6e05\u7a7a\u3002", "info");
       return;
     }
     if (!confirm("\u786e\u5b9a\u6e05\u7a7a\u56de\u6536\u7ad9\uff1f\u6b64\u64cd\u4f5c\u4e0d\u53ef\u64a4\u56de\u3002")) return;
     try {
       await request("/entries/purge_deleted", { method: "POST", body: JSON.stringify({}) });
+      toast("\u56de\u6536\u7ad9\u5df2\u6e05\u7a7a", "success");
       await reloadList();
     } catch (error) {
-      alert(`\u6e05\u7a7a\u56de\u6536\u7ad9\u5931\u8d25: ${error}`);
+      toast(`\u6e05\u7a7a\u56de\u6536\u7ad9\u5931\u8d25: ${error}`, "error");
     }
   });
 
   async function loadTags() {
-    sidebar.textContent = "加载标签...";
+    sidebar.textContent = "\u52a0\u8f7d\u6807\u7b7e...";
     try {
       const res = await request("/tags?limit=200");
       const items = res.items || [];
       sidebar.textContent = "";
       const headerRow = create("div", { class: "pv-sidebar-header-row" }, [
-        create("div", { class: "pv-sidebar-header", text: "标签" }),
-        create("button", { class: "pv-btn pv-small pv-sidebar-tidy-btn", text: "整理标签" }),
+        create("div", { class: "pv-sidebar-header", text: "\u6807\u7b7e" }),
+        create("button", { class: "pv-btn pv-small pv-sidebar-tidy-btn", text: "\u6574\u7406\u6807\u7b7e" }),
       ]);
       const tidyButton = headerRow.querySelector("button");
       tidyButton.addEventListener("click", async () => {
         try {
-          if (!confirm("将删除没有任何记录引用的标签，并补充缺失的标签记录。确定继续？")) return;
+          if (!confirm("\u5c06\u5220\u9664\u6ca1\u6709\u4efb\u4f55\u8bb0\u5f55\u5f15\u7528\u7684\u6807\u7b7e\uff0c\u5e76\u8865\u5145\u7f3a\u5931\u7684\u6807\u7b7e\u8bb0\u5f55\u3002\u786e\u5b9a\u7ee7\u7eed\uff1f")) return;
           const result = await request("/tags/tidy", { method: "POST", body: JSON.stringify({}) });
-          alert(`整理完成：删除 ${result.removed || 0} 个无用标签，新增 ${result.added || 0} 个标签。`);
+          toast(`\u6574\u7406\u5b8c\u6210\uff1a\u5220\u9664 ${result.removed || 0} \u4e2a\u65e0\u7528\u6807\u7b7e\uff0c\u65b0\u589e ${result.added || 0} \u4e2a\u6807\u7b7e\u3002`, "success");
           await loadTags();
         } catch (e) {
-          alert(`整理标签失败: ${e}`);
+          toast(`\u6574\u7406\u6807\u7b7e\u5931\u8d25: ${e}`, "error");
         }
       });
       const allRow = create("div", {
         class: "pv-sidebar-item pv-sidebar-item-active",
-        text: "全部",
+        text: "\u5168\u90e8",
       });
       selectedTag = "";
       allRow.addEventListener("click", () => {
         selectedTag = "";
         inputTags.value = "";
         updateSidebarActive(allRow);
-        reloadList().catch((e) => alert(String(e)));
+        reloadList().catch((e) => toast(String(e), "error"));
       });
       const tagSearchInput = create("input", {
         class: "pv-input pv-sidebar-search",
-        placeholder: "搜索标签…",
+        placeholder: "\u641c\u7d22\u6807\u7b7e\u2026",
       });
 
       const tagListContainer = create("div", { class: "pv-sidebar-list" });
@@ -295,12 +324,12 @@ function openManager() {
             selectedTag = name;
             inputTags.value = name;
             updateSidebarActive(row);
-            reloadList().catch((e) => alert(String(e)));
+            reloadList().catch((e) => toast(String(e), "error"));
           });
           tagListContainer.appendChild(row);
         });
         if (kw && count === 0) {
-          tagListContainer.appendChild(create("div", { class: "pv-empty", text: "无匹配标签" }));
+          tagListContainer.appendChild(create("div", { class: "pv-empty", text: "\u65e0\u5339\u914d\u6807\u7b7e" }));
         }
       }
 
@@ -312,7 +341,7 @@ function openManager() {
       renderTagItems("");
     } catch (e) {
       sidebar.textContent = "";
-      sidebar.appendChild(create("div", { class: "pv-empty", text: `标签加载失败: ${e}` }));
+      sidebar.appendChild(create("div", { class: "pv-empty", text: `\u6807\u7b7e\u52a0\u8f7d\u5931\u8d25: ${e}` }));
     }
   }
 
@@ -325,7 +354,7 @@ function openManager() {
 
   function renderDetail(entry, assembled) {
     currentPositive = assembled.positive || "";
-    statusBarRight.textContent = `当前: ${entry.title || "未命名"} | ID: ${(entry.id || "").slice(0, 8)}… | v${entry.version || 1}`;
+    statusBarRight.textContent = `\u5f53\u524d: ${entry.title || "\u672a\u547d\u540d"} | ID: ${(entry.id || "").slice(0, 8)}\u2026 | v${entry.version || 1}`;
     const params = entry.params || {};
     const tableRows = [
       ["\u6807\u9898", entry.title || ""],
@@ -370,40 +399,42 @@ function openManager() {
     const thumb = create("img", {
       class: "pv-thumb",
       alt: "thumbnail",
-      src: entry.thumbnail_data_url || `/promptvault/entries/${encodeURIComponent(entry.id)}/thumbnail?ts=${Date.now()}`,
+      src: entry.thumbnail_data_url || thumbUrl(entry.id, entry.updated_at),
     });
     thumb.onerror = () => {
       thumb.replaceWith(create("div", { class: "pv-empty", text: "\u6682\u65e0\u7f29\u7565\u56fe" }));
     };
 
-    const btnCopyPos = create("button", { class: "pv-btn pv-small pv-copy-btn", text: "复制" });
+    const btnCopyPos = create("button", { class: "pv-btn pv-small pv-copy-btn", text: "\u590d\u5236" });
     btnCopyPos.addEventListener("click", async () => {
       try {
         await copyTextToClipboard(assembled.positive || "");
-        btnCopyPos.textContent = "已复制";
-        setTimeout(() => { btnCopyPos.textContent = "复制"; }, 1500);
-      } catch (e) { alert(`复制失败: ${e}`); }
+        btnCopyPos.textContent = "\u2713";
+        toast("\u5df2\u590d\u5236\u6b63\u5411\u63d0\u793a\u8bcd", "success", 1500);
+        setTimeout(() => { btnCopyPos.textContent = "\u590d\u5236"; }, 1500);
+      } catch (e) { toast(`\u590d\u5236\u5931\u8d25: ${e}`, "error"); }
     });
-    const btnCopyNeg = create("button", { class: "pv-btn pv-small pv-copy-btn", text: "复制" });
+    const btnCopyNeg = create("button", { class: "pv-btn pv-small pv-copy-btn", text: "\u590d\u5236" });
     btnCopyNeg.addEventListener("click", async () => {
       try {
         await copyTextToClipboard(assembled.negative || "");
-        btnCopyNeg.textContent = "已复制";
-        setTimeout(() => { btnCopyNeg.textContent = "复制"; }, 1500);
-      } catch (e) { alert(`复制失败: ${e}`); }
+        btnCopyNeg.textContent = "\u2713";
+        toast("\u5df2\u590d\u5236\u8d1f\u5411\u63d0\u793a\u8bcd", "success", 1500);
+        setTimeout(() => { btnCopyNeg.textContent = "\u590d\u5236"; }, 1500);
+      } catch (e) { toast(`\u590d\u5236\u5931\u8d25: ${e}`, "error"); }
     });
 
     const prompts = create("div", { class: "pv-prompt-grid" }, [
       create("div", { class: "pv-prompt-box" }, [
         create("div", { class: "pv-prompt-box-header" }, [
-          create("div", { class: "pv-detail-title", text: "正向提示词" }),
+          create("div", { class: "pv-detail-title", text: "\u6b63\u5411\u63d0\u793a\u8bcd" }),
           btnCopyPos,
         ]),
         create("pre", { class: "pv-pre", text: assembled.positive || "" }),
       ]),
       create("div", { class: "pv-prompt-box" }, [
         create("div", { class: "pv-prompt-box-header" }, [
-          create("div", { class: "pv-detail-title", text: "负向提示词" }),
+          create("div", { class: "pv-detail-title", text: "\u8d1f\u5411\u63d0\u793a\u8bcd" }),
           btnCopyNeg,
         ]),
         create("pre", { class: "pv-pre", text: assembled.negative || "" }),
@@ -446,12 +477,170 @@ function openManager() {
     fieldNeg.value = entry?.raw?.negative || "";
     fieldVars.value = JSON.stringify(entry?.variables || {}, null, 2);
 
+    /* ── Generation params fields ── */
+    const ep = entry?.params || {};
+    const fieldSteps = create("input", { class: "pv-input pv-input-short", placeholder: "steps", type: "number", value: String(ep.steps ?? "") });
+    const fieldCfg = create("input", { class: "pv-input pv-input-short", placeholder: "cfg", type: "number", step: "0.1", value: String(ep.cfg ?? "") });
+    const fieldSampler = create("input", { class: "pv-input pv-input-short", placeholder: "sampler", value: ep.sampler || "" });
+    const fieldScheduler = create("input", { class: "pv-input pv-input-short", placeholder: "scheduler", value: ep.scheduler || "" });
+    const fieldSeed = create("input", { class: "pv-input pv-input-short", placeholder: "seed", type: "number", value: String(ep.seed ?? "") });
+
+    const paramsGrid = create("div", { class: "pv-editor-params-grid" }, [
+      create("label", { class: "pv-editor-param-label", text: "Steps" }), fieldSteps,
+      create("label", { class: "pv-editor-param-label", text: "CFG" }), fieldCfg,
+      create("label", { class: "pv-editor-param-label", text: "Sampler" }), fieldSampler,
+      create("label", { class: "pv-editor-param-label", text: "Scheduler" }), fieldScheduler,
+      create("label", { class: "pv-editor-param-label", text: "Seed" }), fieldSeed,
+    ]);
+
+    /* ── Thumbnail upload ── */
+    const THUMB_MAX_W = 256;
+    let pendingThumbB64 = null;
+    let pendingThumbW = 0;
+    let pendingThumbH = 0;
+    let thumbCleared = false;
+
+    const thumbPreview = create("img", { class: "pv-editor-thumb-preview", alt: "thumbnail" });
+    const thumbPlaceholder = create("div", { class: "pv-editor-thumb-placeholder", text: "\u70b9\u51fb\u6216\u62d6\u62fd\u4e0a\u4f20\u56fe\u7247\uff08\u652f\u6301\u8bfb\u53d6\u5143\u6570\u636e\uff09" });
+    const thumbFileInput = create("input", { type: "file", accept: "image/*" });
+    thumbFileInput.style.display = "none";
+    const btnClearThumb = create("button", { class: "pv-btn pv-small pv-danger", text: "\u6e05\u9664" });
+    btnClearThumb.style.display = "none";
+
+    const thumbDropZone = create("div", { class: "pv-editor-thumb-zone" }, [
+      thumbPreview, thumbPlaceholder, thumbFileInput,
+    ]);
+    const thumbRow = create("div", { class: "pv-editor-thumb-row" }, [
+      thumbDropZone, btnClearThumb,
+    ]);
+
+    if (entry?.thumbnail_data_url) {
+      thumbPreview.src = entry.thumbnail_data_url;
+      thumbPreview.style.display = "block";
+      thumbPlaceholder.style.display = "none";
+      btnClearThumb.style.display = "";
+    } else {
+      thumbPreview.style.display = "none";
+    }
+
+    function applyMetadata(d) {
+      if (d.positive) fieldPos.value = d.positive;
+      if (d.negative) fieldNeg.value = d.negative;
+      if (d.steps) fieldSteps.value = String(d.steps);
+      if (d.cfg) fieldCfg.value = String(d.cfg);
+      if (d.sampler) fieldSampler.value = d.sampler;
+      if (d.scheduler) fieldScheduler.value = d.scheduler;
+      if (d.seed) fieldSeed.value = String(d.seed);
+      if (d.model_name && !fieldModel.value.trim()) fieldModel.value = d.model_name;
+    }
+
+    async function tryExtractMetadata(fullDataUrl) {
+      try {
+        const res = await request("/extract_image_metadata", {
+          method: "POST",
+          body: JSON.stringify({ image_b64: fullDataUrl }),
+        });
+        const d = res.data || {};
+        const keys = Object.keys(d).filter((k) => d[k] !== "" && d[k] !== 0 && d[k] != null);
+        if (!keys.length) {
+          toast("\u56fe\u7247\u4e2d\u672a\u68c0\u6d4b\u5230\u5143\u6570\u636e", "info");
+          return;
+        }
+        const summary = keys.map((k) => {
+          const v = String(d[k]);
+          return `${k}: ${v.length > 40 ? v.slice(0, 40) + "\u2026" : v}`;
+        }).join("\n");
+        if (confirm(`\u68c0\u6d4b\u5230\u56fe\u7247\u5143\u6570\u636e\uff0c\u662f\u5426\u8986\u76d6\u5f53\u524d\u5b57\u6bb5\uff1f\n\n${summary}`)) {
+          applyMetadata(d);
+          toast("\u5df2\u4ece\u56fe\u7247\u5143\u6570\u636e\u586b\u5145\u5b57\u6bb5", "success");
+        }
+      } catch (e) {
+        toast(`\u5143\u6570\u636e\u63d0\u53d6\u5931\u8d25: ${e}`, "error");
+      }
+    }
+
+    function processImageFile(file) {
+      if (!file || !file.type.startsWith("image/")) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const fullDataUrl = reader.result;
+        const img = new Image();
+        img.onload = () => {
+          let w = img.width, h = img.height;
+          if (w > THUMB_MAX_W) {
+            h = Math.max(1, Math.round(h * (THUMB_MAX_W / w)));
+            w = THUMB_MAX_W;
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+          const dataUrl = canvas.toDataURL("image/png");
+          pendingThumbB64 = dataUrl;
+          pendingThumbW = w;
+          pendingThumbH = h;
+          thumbCleared = false;
+          thumbPreview.src = dataUrl;
+          thumbPreview.style.display = "block";
+          thumbPlaceholder.style.display = "none";
+          btnClearThumb.style.display = "";
+        };
+        img.src = fullDataUrl;
+        tryExtractMetadata(fullDataUrl);
+      };
+      reader.readAsDataURL(file);
+    }
+
+    thumbDropZone.addEventListener("click", (e) => {
+      if (e.target === btnClearThumb) return;
+      thumbFileInput.click();
+    });
+    thumbFileInput.addEventListener("change", () => {
+      if (thumbFileInput.files?.[0]) processImageFile(thumbFileInput.files[0]);
+    });
+    thumbDropZone.addEventListener("dragover", (e) => { e.preventDefault(); thumbDropZone.classList.add("pv-drag-over"); });
+    thumbDropZone.addEventListener("dragleave", () => { thumbDropZone.classList.remove("pv-drag-over"); });
+    thumbDropZone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      thumbDropZone.classList.remove("pv-drag-over");
+      const file = e.dataTransfer?.files?.[0];
+      if (file) processImageFile(file);
+    });
+    btnClearThumb.addEventListener("click", (e) => {
+      e.stopPropagation();
+      pendingThumbB64 = null;
+      pendingThumbW = 0;
+      pendingThumbH = 0;
+      thumbCleared = true;
+      thumbPreview.style.display = "none";
+      thumbPreview.src = "";
+      thumbPlaceholder.style.display = "";
+      btnClearThumb.style.display = "none";
+      thumbFileInput.value = "";
+    });
+
     const buttonSave = create("button", { class: "pv-btn pv-primary", text: "\u4fdd\u5b58" });
+    const closeEditor = () => {
+      if (document.body.contains(overlayEditor)) document.body.removeChild(overlayEditor);
+    };
     const buttonCancel = create("button", {
       class: "pv-btn pv-danger",
       text: "\u53d6\u6d88",
-      onclick: () => document.body.removeChild(overlayEditor),
+      onclick: closeEditor,
     });
+
+    function collectParams() {
+      const p = {};
+      const sv = fieldSteps.value.trim();
+      if (sv) p.steps = parseInt(sv, 10) || 0;
+      const cv = fieldCfg.value.trim();
+      if (cv) p.cfg = parseFloat(cv) || 0;
+      if (fieldSampler.value.trim()) p.sampler = fieldSampler.value.trim();
+      if (fieldScheduler.value.trim()) p.scheduler = fieldScheduler.value.trim();
+      const seedv = fieldSeed.value.trim();
+      if (seedv) p.seed = parseInt(seedv, 10) || 0;
+      return p;
+    }
 
     buttonSave.addEventListener("click", async () => {
       let variables = {};
@@ -461,7 +650,7 @@ function openManager() {
           throw new Error("variables must be object");
         }
       } catch (error) {
-        alert(`JSON parse error: ${error}`);
+        toast(`JSON \u89e3\u6790\u9519\u8bef: ${error}`, "error");
         return;
       }
 
@@ -471,7 +660,18 @@ function openManager() {
         model_scope: parseCommaList(fieldModel.value),
         raw: { positive: fieldPos.value, negative: fieldNeg.value },
         variables,
+        params: collectParams(),
       };
+
+      if (pendingThumbB64) {
+        payload.thumbnail_b64 = pendingThumbB64;
+        payload.thumbnail_width = pendingThumbW;
+        payload.thumbnail_height = pendingThumbH;
+      } else if (thumbCleared) {
+        payload.thumbnail_b64 = "";
+        payload.thumbnail_width = 0;
+        payload.thumbnail_height = 0;
+      }
 
       try {
         if (isNew) {
@@ -479,17 +679,27 @@ function openManager() {
         } else {
           await request(`/entries/${encodeURIComponent(entry.id)}`, { method: "PUT", body: JSON.stringify(payload) });
         }
-        document.body.removeChild(overlayEditor);
+        closeEditor();
+        toast(isNew ? "\u521b\u5efa\u6210\u529f" : "\u4fdd\u5b58\u6210\u529f", "success");
         await reloadList();
       } catch (error) {
-        alert(`保存失败: ${error}`);
+        toast(`\u4fdd\u5b58\u5931\u8d25: ${error}`, "error");
       }
     });
+
+    const editorKeyHandler = (event) => {
+      if (event.key === "Escape") { closeEditor(); }
+    };
+    overlayEditor.addEventListener("keydown", editorKeyHandler);
 
     const content = create("div", { class: "pv-editor-body" }, [
       fieldTitle,
       fieldTags,
       fieldModel,
+      create("div", { class: "pv-detail-title", text: "\u7f29\u7565\u56fe\uff08\u4e0a\u4f20\u542b\u5143\u6570\u636e\u7684\u56fe\u7247\u53ef\u81ea\u52a8\u586b\u5145\u53c2\u6570\uff09" }),
+      thumbRow,
+      create("div", { class: "pv-detail-title", text: "\u751f\u6210\u53c2\u6570" }),
+      paramsGrid,
       create("div", { class: "pv-split" }, [fieldPos, fieldNeg]),
       create("div", { class: "pv-detail-title", text: "\u53d8\u91cf\uff08\u53ef\u88ab nodes.variables_json \u8986\u76d6\uff09" }),
       fieldVars,
@@ -499,9 +709,10 @@ function openManager() {
     editor.appendChild(content);
     overlayEditor.appendChild(editor);
     overlayEditor.addEventListener("click", (event) => {
-      if (event.target === overlayEditor) document.body.removeChild(overlayEditor);
+      if (event.target === overlayEditor) closeEditor();
     });
     document.body.appendChild(overlayEditor);
+    fieldTitle.focus();
   }
 
   async function reloadList() {
@@ -516,7 +727,7 @@ function openManager() {
     const result = await request(`/entries?${params.toString()}`);
     list.textContent = "";
     const totalCount = result.items?.length || 0;
-    statusBarLeft.textContent = `共 ${totalCount} 条记录` + (currentStatus === "deleted" ? "（回收站）" : "");
+    statusBarLeft.textContent = `\u5171 ${totalCount} \u6761\u8bb0\u5f55` + (currentStatus === "deleted" ? "\uff08\u56de\u6536\u7ad9\uff09" : "");
     statusBarRight.textContent = "";
     if (!totalCount) {
       list.appendChild(create("div", { class: "pv-empty", text: "\u6ca1\u6709\u627e\u5230\u8bb0\u5f55\u3002" }));
@@ -528,17 +739,15 @@ function openManager() {
       const thumb = create("img", {
         class: "pv-row-thumb",
         alt: "thumbnail",
-        src: `/promptvault/entries/${encodeURIComponent(item.id)}/thumbnail?ts=${Date.now()}`,
+        src: thumbUrl(item.id, item.updated_at),
       });
-      thumb.onerror = () => {
-        thumb.style.display = "none";
-      };
+      thumb.onerror = () => { thumb.style.display = "none"; };
       const tagsText = (item.tags || []).join(", ");
       const timeText = formatTimestamp(item.updated_at);
-      const subText = tagsText ? `标签: ${tagsText}  ·  ${timeText}` : timeText;
+      const subText = tagsText ? `\u6807\u7b7e: ${tagsText}  \u00b7  ${timeText}` : timeText;
       const left = create("div", { class: "pv-row-left" }, [
         thumb,
-        create("div", { class: "pv-row-title", text: item.title || "(untitled)" }),
+        create("div", { class: "pv-row-title", text: item.title || "(\u672a\u547d\u540d)" }),
         create("div", { class: "pv-row-sub", text: subText }),
       ]);
       const buttonNode = create("button", { class: "pv-btn pv-small", text: "\u65b0\u5efa\u68c0\u7d22" });
@@ -553,20 +762,17 @@ function openManager() {
         try {
           const graph = app.graph || app.canvas?.graph;
           if (!graph?.add) {
-            alert("当前画布不可用，请先打开一个工作流");
+            toast("\u5f53\u524d\u753b\u5e03\u4e0d\u53ef\u7528\uff0c\u8bf7\u5148\u6253\u5f00\u4e00\u4e2a\u5de5\u4f5c\u6d41", "error");
             return;
           }
 
           const createNode = (type) => {
-            try {
-              return globalThis.LiteGraph?.createNode?.(type) || null;
-            } catch (_e) {
-              return null;
-            }
+            try { return globalThis.LiteGraph?.createNode?.(type) || null; }
+            catch (_e) { return null; }
           };
-          const node = createNode("PromptVaultQuery") || createNode("提示词库检索");
+          const node = createNode("PromptVaultQuery") || createNode("\u63d0\u793a\u8bcd\u5e93\u68c0\u7d22");
           if (!node) {
-            alert("未找到节点类型：PromptVaultQuery");
+            toast("\u672a\u627e\u5230\u8282\u70b9\u7c7b\u578b\uff1aPromptVaultQuery", "error");
             return;
           }
 
@@ -592,10 +798,10 @@ function openManager() {
           app.graph?.setDirtyCanvas?.(true, true);
           app.canvas?.setDirty?.(true, true);
 
-          // Close manager after creation so users can immediately see the new node on canvas.
-          document.body.removeChild(overlay);
+          closeManager();
+          toast("\u68c0\u7d22\u8282\u70b9\u5df2\u6dfb\u52a0\u5230\u753b\u5e03", "success");
         } catch (error) {
-          alert(`创建节点失败: ${error}`);
+          toast(`\u521b\u5efa\u8282\u70b9\u5931\u8d25: ${error}`, "error");
         }
       });
 
@@ -604,7 +810,7 @@ function openManager() {
           const full = await request(`/entries/${encodeURIComponent(item.id)}`);
           openEditor(full);
         } catch (error) {
-          alert(`加载编辑数据失败: ${error}`);
+          toast(`\u52a0\u8f7d\u7f16\u8f91\u6570\u636e\u5931\u8d25: ${error}`, "error");
         }
       });
       buttonDelete.addEventListener("click", async () => {
@@ -615,13 +821,15 @@ function openManager() {
               method: "PUT",
               body: JSON.stringify({ status: "active" }),
             });
+            toast("\u8bb0\u5f55\u5df2\u8fd8\u539f", "success");
           } else {
             if (!confirm("\u786e\u5b9a\u5220\u9664\uff1f\u5c06\u79fb\u5165\u56de\u6536\u7ad9\u3002")) return;
             await request(`/entries/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+            toast("\u5df2\u79fb\u5165\u56de\u6536\u7ad9", "success");
           }
           await reloadList();
         } catch (error) {
-          alert(`\u66f4\u65b0\u72b6\u6001\u5931\u8d25: ${error}`);
+          toast(`\u66f4\u65b0\u72b6\u6001\u5931\u8d25: ${error}`, "error");
         }
       });
 
@@ -637,7 +845,7 @@ function openManager() {
           });
           renderDetail(full, assembled);
         } catch (error) {
-          alert(`加载详情失败: ${error}`);
+          toast(`\u52a0\u8f7d\u8be6\u60c5\u5931\u8d25: ${error}`, "error");
         }
       });
 
@@ -661,11 +869,24 @@ function openManager() {
     }
   }
 
-  buttonSearch.addEventListener("click", () => reloadList().catch((e) => alert(String(e))));
+  /* ── Keyboard: Enter to search, Escape to close ── */
+  const triggerSearch = () => reloadList().catch((e) => toast(String(e), "error"));
+  buttonSearch.addEventListener("click", triggerSearch);
+  [inputQuery, inputTags, inputModel].forEach((inp) => {
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); triggerSearch(); }
+    });
+  });
+
+  const managerKeyHandler = (event) => {
+    if (event.key === "Escape") closeManager();
+  };
+  overlay.addEventListener("keydown", managerKeyHandler);
+
   buttonNew.addEventListener("click", () => openEditor(null));
-  buttonClose.addEventListener("click", () => document.body.removeChild(overlay));
+  buttonClose.addEventListener("click", closeManager);
   overlay.addEventListener("click", (event) => {
-    if (event.target === overlay) document.body.removeChild(overlay);
+    if (event.target === overlay) closeManager();
   });
 
   modal.appendChild(title);
@@ -674,14 +895,57 @@ function openManager() {
   modal.appendChild(statusBar);
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
+
+  inputQuery.focus();
+
   loadTags().catch((e) => {
     sidebar.textContent = "";
-    sidebar.appendChild(create("div", { class: "pv-empty", text: `标签加载失败: ${e}` }));
+    sidebar.appendChild(create("div", { class: "pv-empty", text: `\u6807\u7b7e\u52a0\u8f7d\u5931\u8d25: ${e}` }));
   });
   reloadList().catch((e) => {
     list.textContent = "";
     list.appendChild(create("div", { class: "pv-empty", text: `Error: ${e}` }));
   });
+}
+
+let _modelResCache = null;
+async function getModelResolutions() {
+  if (_modelResCache) return _modelResCache;
+  try {
+    const resp = await fetch("/promptvault/model_resolutions");
+    if (resp.ok) _modelResCache = await resp.json();
+  } catch (_e) { /* ignore */ }
+  return _modelResCache || {};
+}
+
+function setupModelResolutionNode(node) {
+  const modelWidget = node.widgets?.find((w) => w.name === "model");
+  const sizeWidget = node.widgets?.find((w) => w.name === "size");
+  if (!modelWidget || !sizeWidget) return;
+
+  const originalSizes = [...(sizeWidget.options?.values || [])];
+
+  async function updateSizes() {
+    const data = await getModelResolutions();
+    const modelSizes = data[modelWidget.value];
+    if (modelSizes && modelSizes.length) {
+      sizeWidget.options.values = modelSizes;
+      if (!modelSizes.includes(sizeWidget.value)) {
+        sizeWidget.value = modelSizes[0];
+      }
+    } else {
+      sizeWidget.options.values = originalSizes;
+    }
+    app.graph?.setDirtyCanvas?.(true, false);
+  }
+
+  const origCallback = modelWidget.callback;
+  modelWidget.callback = function (...args) {
+    if (origCallback) origCallback.apply(this, args);
+    updateSizes();
+  };
+
+  updateSizes();
 }
 
 if (!globalThis[GUARD_KEY]) {
@@ -708,6 +972,11 @@ if (!globalThis[GUARD_KEY]) {
           ensureFloatingButton(openManager);
         }
       }, 500);
+    },
+    nodeCreated(node) {
+      if (node.comfyClass === "ModelResolution") {
+        setupModelResolutionNode(node);
+      }
     },
   });
 }

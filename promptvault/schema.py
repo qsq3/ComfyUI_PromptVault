@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS entries (
   thumbnail_png BLOB,
   thumbnail_width INTEGER,
   thumbnail_height INTEGER,
+  favorite INTEGER NOT NULL DEFAULT 0,
+  score REAL NOT NULL DEFAULT 0.0,
   hash TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,

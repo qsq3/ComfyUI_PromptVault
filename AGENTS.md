@@ -218,3 +218,31 @@
 - UI 文案与错误提示全中文。
 
 以上规范作为本项目后续开发的统一基线。
+
+## 12. 大模型辅助功能（PromptAI Assist）
+
+为提升提示词创建效率，系统支持接入大语言模型自动生成「标题」与「标签」，辅助用户快速命名与分类。
+
+### 1. 大模型接入设置
+
+支持多种大模型服务来源：
+
+- **OpenAI**：通过官方 API 接口调用 GPT-4/3.5。
+- **Azure OpenAI**：配置自定义端点与 API Key。
+- **LM Studio 本地部署**（推荐）：
+  - 通过本地 HTTP 服务调用，如 `http://localhost:1234/v1/chat/completions`。
+  - 支持 GGUF 格式模型（如 Mistral, LLaMA, Zephyr 等）。
+  - 无需联网、响应快、隐私安全。
+  - 建议使用 Chat 模式模型，保持 API 接口兼容 OpenAI 格式。
+
+#### 配置示例（llm_config.json）：
+
+```json
+{
+  "provider": "lmstudio",
+  "endpoint": "http://localhost:1234/v1/chat/completions",
+  "model": "mistral-7b-instruct",
+  "temperature": 0.7,
+  "max_tokens": 512,
+  "timeout": 10
+}

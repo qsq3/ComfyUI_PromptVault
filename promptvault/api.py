@@ -19,6 +19,27 @@ def _bad_request(msg):
     return _json_response({"error": msg}, status=400)
 
 
+def _decode_thumbnail_b64(payload):
+    """If payload contains thumbnail_b64, decode it into thumbnail_png bytes."""
+    b64 = (payload or {}).get("thumbnail_b64")
+    if not b64 or not isinstance(b64, str):
+        return
+    raw = b64.split(",", 1)[-1]
+    try:
+        png_bytes = base64.b64decode(raw)
+    except Exception:
+        return
+    if len(png_bytes) < 8:
+        return
+    payload["thumbnail_png"] = png_bytes
+    payload.pop("thumbnail_b64", None)
+    w = payload.get("thumbnail_width")
+    h = payload.get("thumbnail_height")
+    if isinstance(w, (int, float)) and isinstance(h, (int, float)):
+        payload["thumbnail_width"] = int(w)
+        payload["thumbnail_height"] = int(h)
+
+
 def setup_routes():
     from server import PromptServer  # type: ignore
 
@@ -36,8 +57,14 @@ def setup_routes():
         tags = request.query.get("tags", "")
         model = request.query.get("model", "")
         status = request.query.get("status", "active")
-        limit = int(request.query.get("limit", "20"))
-        offset = int(request.query.get("offset", "0"))
+        try:
+            limit = max(1, min(200, int(request.query.get("limit", "20"))))
+        except (TypeError, ValueError):
+            limit = 20
+        try:
+            offset = max(0, int(request.query.get("offset", "0")))
+        except (TypeError, ValueError):
+            offset = 0
 
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
         items = store.search_entries(q=q, tags=tag_list, model=model, status=status, limit=limit, offset=offset)
@@ -64,6 +91,7 @@ def setup_routes():
             payload = await request.json()
         except Exception:
             return _bad_request("JSON 解析失败")
+        _decode_thumbnail_b64(payload)
         entry = store.create_entry(payload or {})
         return _json_response(entry, status=201)
 
@@ -97,7 +125,7 @@ def setup_routes():
         return web.Response(
             body=thumb["png"],
             content_type="image/png",
-            headers={"Cache-Control": "no-store"},
+            headers={"Cache-Control": "public, max-age=3600"},
         )
 
     @routes.put("/promptvault/entries/{entry_id}")
@@ -108,6 +136,7 @@ def setup_routes():
             payload = await request.json()
         except Exception:
             return _bad_request("JSON 解析失败")
+        _decode_thumbnail_b64(payload)
         try:
             entry = store.update_entry(entry_id, payload or {})
         except KeyError:
@@ -204,6 +233,89 @@ def setup_routes():
     @routes.get("/promptvault/tags")
     async def list_tags(request):
         store = PromptVaultStore.get()
-        limit = int(request.query.get("limit", "200"))
+        try:
+            limit = max(1, min(1000, int(request.query.get("limit", "200"))))
+        except (TypeError, ValueError):
+            limit = 200
         items = store.list_tags(limit=limit)
         return _json_response({"items": items, "limit": limit})
+
+    @routes.post("/promptvault/extract_image_metadata")
+    async def extract_image_metadata(request):
+        """Accept a base64-encoded image, write to temp file, extract metadata."""
+        import io
+        import tempfile
+        try:
+            payload = await request.json()
+        except Exception:
+            return _bad_request("JSON 解析失败")
+        b64 = (payload or {}).get("image_b64", "")
+        if not b64:
+            return _bad_request("缺少 image_b64")
+        raw = b64.split(",", 1)[-1]
+        try:
+            img_bytes = base64.b64decode(raw)
+        except Exception:
+            return _bad_request("base64 解码失败")
+
+        from .image_metadata import extract_from_info, extract_exif_xmp
+        from PIL import Image as PILImage
+
+        try:
+            img = PILImage.open(io.BytesIO(img_bytes))
+            info = dict(getattr(img, "info", {}) or {})
+            found = {}
+            found.update(extract_from_info(info))
+            if (img.format or "").upper() != "PNG":
+                found.update(extract_exif_xmp(img))
+            img.close()
+        except Exception as exc:
+            return _json_response({"found": {}, "error": f"图片解析失败: {exc}"})
+
+        if not found:
+            return _json_response({"found": {}, "data": {}})
+
+        from ..nodes import (
+            _extract_generation_data,
+            _extract_from_workflow_obj,
+            _parse_parameters_text,
+        )
+
+        data = {}
+        prompt_obj = found.get("prompt")
+        if isinstance(prompt_obj, str):
+            try:
+                prompt_obj = json.loads(prompt_obj)
+            except Exception:
+                prompt_obj = None
+        if isinstance(prompt_obj, dict):
+            data.update(_extract_generation_data(prompt_obj))
+
+        workflow_obj = found.get("workflow")
+        if isinstance(workflow_obj, str):
+            try:
+                workflow_obj = json.loads(workflow_obj)
+            except Exception:
+                workflow_obj = None
+        if isinstance(workflow_obj, dict):
+            wf_data = _extract_from_workflow_obj(workflow_obj)
+            for k, v in wf_data.items():
+                if v not in (None, "", 0):
+                    data[k] = v
+
+        params_text = found.get("parameters")
+        if isinstance(params_text, str) and params_text.strip():
+            params_data = _parse_parameters_text(params_text)
+            for k, v in params_data.items():
+                if v not in (None, "", 0):
+                    data[k] = v
+
+        return _json_response({"found": list(found.keys()), "data": data})
+
+    @routes.get("/promptvault/model_resolutions")
+    async def model_resolutions(_request):
+        from ..nodes import MODEL_RESOLUTIONS
+        data = {}
+        for model, sizes in MODEL_RESOLUTIONS.items():
+            data[model] = [f"{w}x{h}" for w, h in sizes]
+        return _json_response(data)

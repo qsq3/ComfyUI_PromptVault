@@ -58,6 +58,10 @@ class PromptVaultStore:
             conn.execute("ALTER TABLE entries ADD COLUMN thumbnail_width INTEGER")
         if "thumbnail_height" not in cols:
             conn.execute("ALTER TABLE entries ADD COLUMN thumbnail_height INTEGER")
+        if "favorite" not in cols:
+            conn.execute("ALTER TABLE entries ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0")
+        if "score" not in cols:
+            conn.execute("ALTER TABLE entries ADD COLUMN score REAL NOT NULL DEFAULT 0.0")
 
     def _fts_upsert(self, conn, entry):
         tags = " ".join(entry.get("tags", []))
@@ -509,6 +513,16 @@ class PromptVaultStore:
         finally:
             conn.close()
 
+    @staticmethod
+    def _escape_fts_query(raw):
+        """Wrap each token in double-quotes so FTS5 treats special chars as literals."""
+        tokens = raw.split()
+        escaped = []
+        for t in tokens:
+            t = t.replace('"', '""')
+            escaped.append(f'"{t}"')
+        return " ".join(escaped) if escaped else ""
+
     def search_entries(self, q="", tags=None, model="", status="active", limit=20, offset=0):
         tags = normalize_tags(tags or [])
         q = normalize_text(q)
@@ -530,6 +544,7 @@ class PromptVaultStore:
                 params.append(f"%{t}%")
 
             if q:
+                fts_q = self._escape_fts_query(q)
                 sql = f"""
                 SELECT e.id, e.title, e.tags_json, e.model_scope_json, e.updated_at
                 FROM entries_fts f
@@ -539,7 +554,7 @@ class PromptVaultStore:
                 LIMIT ? OFFSET ?
                 """
                 try:
-                    rows = conn.execute(sql, params + [q, int(limit), int(offset)]).fetchall()
+                    rows = conn.execute(sql, params + [fts_q, int(limit), int(offset)]).fetchall()
                     logger.debug("FTS rows=%d", len(rows))
                 except sqlite3.OperationalError:
                     # FTS query syntax can fail on unescaped special chars.
@@ -621,6 +636,8 @@ class PromptVaultStore:
             "has_thumbnail": row["thumbnail_png"] is not None,
             "thumbnail_width": row["thumbnail_width"],
             "thumbnail_height": row["thumbnail_height"],
+            "favorite": int(row["favorite"] or 0),
+            "score": float(row["score"] or 0.0),
             "hash": row["hash"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],

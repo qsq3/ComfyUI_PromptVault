@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+from collections import deque
 from pathlib import Path
 
 logger = logging.getLogger("PromptVault")
@@ -110,12 +111,12 @@ def _extract_prompt_text(prompt, node_id, visited=None):
 def _extract_model_name(prompt, model_node_id):
     if not model_node_id or not isinstance(prompt, dict):
         return ""
-    queue = [str(model_node_id)]
+    queue = deque([str(model_node_id)])
     visited = set()
     model_keys = ("ckpt_name", "model_name", "unet_name")
 
     while queue:
-        node_id = queue.pop(0)
+        node_id = queue.popleft()
         if node_id in visited:
             continue
         visited.add(node_id)
@@ -388,10 +389,10 @@ def _extract_from_workflow_obj(workflow):
     def _find_text_by_backtrace(start_id):
         if not start_id:
             return ""
-        queue = [str(start_id)]
+        queue = deque([str(start_id)])
         visited = set()
         while queue:
-            nid = queue.pop(0)
+            nid = queue.popleft()
             if nid in visited:
                 continue
             visited.add(nid)
@@ -422,11 +423,11 @@ def _extract_from_workflow_obj(workflow):
     def _find_model_by_backtrace(start_id):
         if not start_id:
             return ""
-        queue = [str(start_id)]
+        queue = deque([str(start_id)])
         visited = set()
         keys = ("ckpt_name", "model_name", "unet_name")
         while queue:
-            nid = queue.pop(0)
+            nid = queue.popleft()
             if nid in visited:
                 continue
             visited.add(nid)
@@ -812,12 +813,82 @@ class PromptVaultSaveNode:
             return ("", f"保存失败: {exc}")
 
 
+MODEL_RESOLUTIONS = {
+    "Qwen-Image": [
+        (1328, 1328),
+        (1664, 928),
+        (928, 1664),
+        (1472, 1104),
+        (1104, 1472),
+        (1584, 1056),
+        (1056, 1584),
+    ],
+    "FLUX": [
+        (1024, 1024),
+        (1920, 1088),
+        (1088, 1920),
+        (1408, 1056),
+        (1056, 1408),
+        (2560, 1440),
+    ],
+    "SDXL": [
+        (1024, 1024),
+        (1344, 768),
+        (768, 1344),
+        (1152, 896),
+        (896, 1152),
+    ],
+    "Z-Image": [
+        (1024, 1024),
+        (1600, 900),
+        (720, 1280),
+        (1440, 1440),
+        (1920, 1088),
+    ],
+}
+
+_ALL_MODELS = sorted(MODEL_RESOLUTIONS.keys())
+_SIZE_LOOKUP = {}
+for _m, _sizes in MODEL_RESOLUTIONS.items():
+    for _w, _h in _sizes:
+        _SIZE_LOOKUP.setdefault(f"{_w}x{_h}", []).append(_m)
+_ALL_SIZES = sorted(_SIZE_LOOKUP.keys(), key=lambda s: [int(x) for x in s.split("x")])
+
+
+class ModelResolutionNode:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": (_ALL_MODELS, {"default": _ALL_MODELS[0]}),
+                "size": (_ALL_SIZES, {"default": "1024x1024"}),
+            }
+        }
+
+    RETURN_TYPES = ("INT", "INT", "STRING")
+    RETURN_NAMES = ("width", "height", "info")
+    FUNCTION = "run"
+    CATEGORY = "PromptVault"
+
+    def run(self, model, size):
+        sizes = MODEL_RESOLUTIONS.get(model, [])
+        size_map = {f"{w}x{h}": (w, h) for w, h in sizes}
+        if size in size_map:
+            w, h = size_map[size]
+            return (w, h, f"{model}: {w}×{h}")
+        available = ", ".join(f"{w}x{h}" for w, h in sizes)
+        w, h = sizes[0] if sizes else (1024, 1024)
+        return (w, h, f"{model} 不支持 {size}，已回退 {w}×{h} | 可选: {available}")
+
+
 NODE_CLASS_MAPPINGS = {
     "PromptVaultQuery": PromptVaultQueryNode,
     "PromptVaultSave": PromptVaultSaveNode,
+    "ModelResolution": ModelResolutionNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptVaultQuery": "提示词库检索",
     "PromptVaultSave": "提示词库保存",
+    "ModelResolution": "模型出图尺寸",
 }
