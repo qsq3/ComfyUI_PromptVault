@@ -230,6 +230,86 @@ def setup_routes():
             return _json_response({"error": "未找到模板"}, status=404)
         return _json_response(tpl)
 
+    # ── LLM / AI Auto-Tag routes ──
+
+    @routes.get("/promptvault/llm/config")
+    async def get_llm_config(_request):
+        store = PromptVaultStore.get()
+        config = store.get_llm_config()
+        safe = dict(config)
+        key = safe.get("api_key", "")
+        if key and len(key) > 4:
+            safe["api_key"] = key[:2] + "*" * (len(key) - 4) + key[-2:]
+        return _json_response(safe)
+
+    @routes.put("/promptvault/llm/config")
+    async def put_llm_config(request):
+        try:
+            payload = await request.json()
+        except Exception:
+            return _bad_request("JSON 解析失败")
+        if not isinstance(payload, dict):
+            return _bad_request("请求体必须是 JSON 对象")
+        store = PromptVaultStore.get()
+        current = store.get_llm_config()
+        current.update(payload)
+        store.set_llm_config(current)
+        safe = dict(current)
+        key = safe.get("api_key", "")
+        if key and len(key) > 4:
+            safe["api_key"] = key[:2] + "*" * (len(key) - 4) + key[-2:]
+        return _json_response(safe)
+
+    @routes.post("/promptvault/llm/auto_tag")
+    async def llm_auto_tag(request):
+        try:
+            payload = await request.json()
+        except Exception:
+            return _bad_request("JSON 解析失败")
+        positive = (payload or {}).get("positive", "")
+        negative = (payload or {}).get("negative", "")
+        existing_tags = (payload or {}).get("existing_tags", [])
+        if not positive and not negative:
+            return _bad_request("正向和负向提示词不能同时为空")
+
+        store = PromptVaultStore.get()
+        config = store.get_llm_config()
+        if not config.get("enabled"):
+            return _json_response(
+                {"error": "LLM 功能未启用，请先在设置中开启并配置 LM Studio 地址。"},
+                status=400,
+            )
+
+        from .llm import LLMClient
+
+        client = LLMClient(config)
+        try:
+            tags = await client.auto_tag(positive, negative, existing_tags)
+        except Exception as exc:
+            return _json_response({"error": str(exc)}, status=502)
+        return _json_response({"tags": tags})
+
+    @routes.post("/promptvault/llm/test")
+    async def llm_test(request):
+        store = PromptVaultStore.get()
+        config = store.get_llm_config()
+
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict) and payload:
+            config.update(payload)
+
+        from .llm import LLMClient
+
+        client = LLMClient(config)
+        try:
+            result = await client.test_connection()
+        except Exception as exc:
+            return _json_response({"ok": False, "error": str(exc)}, status=502)
+        return _json_response(result)
+
     @routes.get("/promptvault/tags")
     async def list_tags(request):
         store = PromptVaultStore.get()

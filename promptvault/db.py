@@ -618,6 +618,37 @@ class PromptVaultStore:
         finally:
             conn.close()
 
+    # ── LLM config helpers ──
+
+    def get_llm_config(self) -> dict:
+        from .llm import DEFAULT_LLM_CONFIG
+
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = 'llm_config'"
+            ).fetchone()
+            if row:
+                try:
+                    stored = json.loads(row["value"])
+                    return {**DEFAULT_LLM_CONFIG, **stored}
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            return dict(DEFAULT_LLM_CONFIG)
+        finally:
+            conn.close()
+
+    def set_llm_config(self, config: dict):
+        conn = self._connect()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO meta(key, value) VALUES('llm_config', ?)",
+                (json.dumps(config, ensure_ascii=False),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def _row_to_entry(self, row):
         return {
             "id": row["id"],

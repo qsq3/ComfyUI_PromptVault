@@ -645,6 +645,106 @@
   scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
 }
 
+/* ── Tags row with AI button ── */
+.pv-tags-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.pv-input-flex {
+  flex: 1;
+  min-width: 0;
+}
+.pv-ai-tag-btn {
+  background: linear-gradient(135deg, #2d5a3d, #1a6040);
+  border-color: rgba(46, 204, 113, 0.2);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.pv-ai-tag-btn:hover {
+  background: linear-gradient(135deg, #367048, #20724c);
+}
+.pv-ai-tag-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+/* ── Tag picker panel ── */
+.pv-tag-picker {
+  width: min(480px, 88vw);
+  height: auto;
+  max-height: min(520px, 80vh);
+}
+.pv-tag-picker-body {
+  padding: 14px;
+  overflow-y: auto;
+  max-height: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pv-tag-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+.pv-tag-picker-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.pv-tag-picker-item input[type="checkbox"] {
+  accent-color: #1a6090;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.pv-tag-picker-item label {
+  cursor: pointer;
+  user-select: none;
+}
+.pv-tag-existing {
+  opacity: 0.45;
+  font-style: italic;
+}
+
+/* ── LLM settings panel ── */
+.pv-llm-settings {
+  width: min(560px, 90vw);
+  height: auto;
+  max-height: min(640px, 86vh);
+}
+.pv-llm-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 0;
+  user-select: none;
+}
+.pv-llm-switch input[type="checkbox"] {
+  accent-color: #1a6090;
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+.pv-llm-test-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+.pv-llm-test-result {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ── Responsive ── */
 @media (max-width: 900px) {
   .pv-body {
