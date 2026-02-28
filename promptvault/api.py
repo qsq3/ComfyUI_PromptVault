@@ -45,6 +45,15 @@ def _download_name(ext):
     return f"promptvault-export-{stamp}.{ext}"
 
 
+def _decode_import_bytes(raw_bytes):
+    for encoding in ("utf-8-sig", "utf-8", "gb18030", "cp936"):
+        try:
+            return raw_bytes.decode(encoding)
+        except Exception:
+            continue
+    raise UnicodeDecodeError("import", raw_bytes, 0, 1, "unsupported text encoding")
+
+
 def setup_routes():
     from server import PromptServer  # type: ignore
 
@@ -316,9 +325,9 @@ def setup_routes():
         if conflict_strategy != "merge":
             return _bad_request("当前仅支持 merge 冲突策略")
         try:
-            text = raw_bytes.decode("utf-8-sig")
+            text = _decode_import_bytes(raw_bytes)
         except Exception:
-            return _bad_request("导入文件必须为 UTF-8 编码")
+            return _bad_request("导入文件编码不支持，请使用 UTF-8 或 GB18030/GBK")
 
         try:
             if fmt == "csv":

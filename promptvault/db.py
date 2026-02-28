@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sqlite3
+import sys
 import threading
 import uuid
 
@@ -794,6 +795,16 @@ class PromptVaultStore:
         row = conn.execute(sql_like, params + [like_q, like_q, like_q]).fetchone()
         return int((row or {})["total"] if row else 0)
 
+    @staticmethod
+    def _ensure_csv_field_limit():
+        limit = sys.maxsize
+        while True:
+            try:
+                csv.field_size_limit(limit)
+                return
+            except OverflowError:
+                limit = max(131072, limit // 10)
+
     def list_entry_versions(self, entry_id, limit=50):
         conn = self._connect()
         try:
@@ -958,6 +969,7 @@ class PromptVaultStore:
             conn.close()
 
     def import_csv_text(self, csv_text, conflict_strategy="merge"):
+        self._ensure_csv_field_limit()
         reader = csv.DictReader(io.StringIO(csv_text or ""))
         bundle = {"templates": [], "fragments": [], "entries": []}
         for row in reader:

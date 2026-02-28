@@ -108,9 +108,309 @@ async function request(path, options = {}) {
   });
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`${response.status}: ${text}`);
+    let message = text;
+    try {
+      const parsed = JSON.parse(text);
+      message = parsed.error || parsed.message || text;
+    } catch (_error) {
+      message = text;
+    }
+    throw new Error(`${response.status}: ${message}`);
   }
   return await response.json();
+}
+
+function getNodeWidget(node, name) {
+  return node?.widgets?.find((widget) => widget.name === name) || null;
+}
+
+function getNodeWidgetValue(node, name, fallback = "") {
+  return getNodeWidget(node, name)?.value ?? fallback;
+}
+
+function setNodeWidgetValue(node, name, value) {
+  const widget = getNodeWidget(node, name);
+  if (!widget) return;
+  widget.value = value;
+  if (typeof widget.callback === "function") {
+    try {
+      widget.callback(value, app.canvas, node, null, widget);
+    } catch (_error) {
+      /* ignore widget callback failures */
+    }
+  }
+}
+
+function markNodeDirty() {
+  app.graph?.setDirtyCanvas?.(true, true);
+  app.canvas?.setDirty?.(true, true);
+}
+
+function openImageLightbox(imageUrl, title = "图片预览") {
+  if (!imageUrl) return;
+  const overlay = create("div", { class: "pv-overlay pv-image-lightbox" });
+  const modal = create("div", { class: "pv-image-lightbox-modal" });
+  const closeLightbox = () => {
+    document.removeEventListener("keydown", onKeyDown);
+    if (document.body.contains(overlay)) document.body.removeChild(overlay);
+  };
+  const onKeyDown = (event) => {
+    if (event.key === "Escape") closeLightbox();
+  };
+  document.addEventListener("keydown", onKeyDown);
+
+  const header = create("div", { class: "pv-title" }, [
+    create("span", { text: title }),
+    create("div", { class: "pv-title-actions" }, [
+      create("button", { class: "pv-btn pv-danger", text: "关闭", onclick: closeLightbox }),
+    ]),
+  ]);
+  const image = create("img", {
+    class: "pv-image-lightbox-img",
+    alt: title,
+    src: imageUrl,
+  });
+  image.addEventListener("load", () => {
+    const vw = Math.max(320, Math.floor(window.innerWidth * 0.9));
+    const vh = Math.max(320, Math.floor(window.innerHeight * 0.88));
+    const naturalW = image.naturalWidth || 0;
+    const naturalH = image.naturalHeight || 0;
+    const targetW = Math.min(Math.max(420, naturalW + 48), vw, 900);
+    const targetH = Math.min(Math.max(360, naturalH + 88), vh, 820);
+    modal.style.width = `${targetW}px`;
+    modal.style.height = `${targetH}px`;
+  });
+  const body = create("div", { class: "pv-image-lightbox-body" }, [image]);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) closeLightbox();
+  });
+  modal.appendChild(header);
+  modal.appendChild(body);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+}
+
+function buildPreviewSummary(entry, assembled, extra = {}) {
+  return {
+    id: entry?.id || "",
+    title: entry?.title || "未命名",
+    tags: entry?.tags || [],
+    model_scope: entry?.model_scope || [],
+    favorite: !!entry?.favorite,
+    score: Number(entry?.score || 0),
+    updated_at: entry?.updated_at || "",
+    positive: assembled?.positive || entry?.raw?.positive || "",
+    negative: assembled?.negative || entry?.raw?.negative || "",
+    thumbnail_url: entry?.id ? thumbUrl(entry.id, entry?.updated_at || "") : "",
+    match_source: extra.match_source || "matched",
+  };
+}
+
+async function fetchPreviewEntryById(entryId, extra = {}) {
+  const full = await request(`/entries/${encodeURIComponent(entryId)}`);
+  const assembled = await request("/assemble", {
+    method: "POST",
+    body: JSON.stringify({ entry_id: entryId, variables_override: {} }),
+  });
+  return buildPreviewSummary(full, assembled, extra);
+}
+
+async function searchPreviewHits({ q, tags, model, limit = 10 }) {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (tags?.length) params.set("tags", tags.join(","));
+  if (model) params.set("model", model);
+  params.set("status", "active");
+  params.set("limit", String(limit));
+  params.set("offset", "0");
+  params.set("sort", "updated_desc");
+  const result = await request(`/entries?${params.toString()}`);
+  return result.items || [];
+}
+
+async function resolveQueryPreview(node) {
+  const mode = String(getNodeWidgetValue(node, "mode", "auto") || "auto").trim();
+  const lockedEntryId = String(getNodeWidgetValue(node, "entry_id", "") || "").trim();
+  if (mode === "locked" && lockedEntryId) {
+    return await fetchPreviewEntryById(lockedEntryId, { match_source: "locked" });
+  }
+  const lockedWithoutId = mode === "locked" && !lockedEntryId;
+
+  const query = String(getNodeWidgetValue(node, "query", "") || "").trim();
+  const title = String(getNodeWidgetValue(node, "title", "") || "").trim();
+  const tags = parseCommaList(String(getNodeWidgetValue(node, "tags", "") || ""));
+  const model = String(getNodeWidgetValue(node, "model", "") || "").trim();
+  const previewLimit = 10;
+  const searchQ = title ? `${title} ${query}`.trim() : query;
+
+  const trySearch = async (qv, tagsV, modelV) => {
+    const rows = await searchPreviewHits({ q: qv, tags: tagsV, model: modelV, limit: previewLimit });
+    return rows || [];
+  };
+
+  let hits = await trySearch(searchQ, tags, model);
+  let matchSource = lockedWithoutId ? "locked_missing_id" : "matched";
+  if (!hits.length && (tags.length || model)) hits = await trySearch(searchQ, tags, "");
+  if (!hits.length && tags.length) hits = await trySearch(searchQ, [], model);
+  if (!hits.length && (tags.length || model)) hits = await trySearch(searchQ, [], "");
+  if (!hits.length && title && query) hits = await trySearch(query, [], "");
+  if (!hits.length && title) hits = await trySearch(title, [], "");
+  if (!hits.length) {
+    hits = await trySearch("", [], "");
+    matchSource = lockedWithoutId ? "locked_missing_id_fallback_latest" : "fallback_latest";
+  }
+
+  if (title && hits.length) {
+    const lowerTitle = title.toLowerCase();
+    const titleHits = hits.filter((item) => String(item?.title || "").toLowerCase().includes(lowerTitle));
+    if (titleHits.length) hits = titleHits;
+  }
+
+  const best = hits[0];
+  if (!best?.id) return null;
+  return await fetchPreviewEntryById(best.id, { match_source: matchSource });
+}
+
+function openQueryPreviewModal(node, preview) {
+  const currentMode = String(getNodeWidgetValue(node, "mode", "auto") || "auto").trim();
+  const currentEntryId = String(getNodeWidgetValue(node, "entry_id", "") || "").trim();
+  const alreadyLocked = currentMode === "locked" && currentEntryId === preview.id;
+
+  const overlay = create("div", { class: "pv-overlay" });
+  const modal = create("div", { class: "pv-modal pv-preview-modal" });
+  const closePreview = () => {
+    if (document.body.contains(overlay)) document.body.removeChild(overlay);
+  };
+
+  const header = create("div", { class: "pv-title" }, [
+    create("span", { text: "检索预览" }),
+    create("div", { class: "pv-title-actions" }, [
+      create("button", { class: "pv-btn pv-danger", text: "关闭", onclick: closePreview }),
+    ]),
+  ]);
+
+  const metaText = [
+    `ID: ${(preview.id || "").slice(0, 8)}…`,
+    preview.updated_at ? `更新于 ${formatTimestamp(preview.updated_at)}` : "",
+  ].filter(Boolean).join(" · ");
+
+  const heroMeta = create("div", { class: "pv-preview-meta", text: metaText });
+  const heroStats = create("div", { class: "pv-preview-stats" }, [
+    create("span", {
+      class: `pv-preview-pill ${preview.favorite ? "pv-preview-pill-hot" : ""}`,
+      text: preview.favorite ? "已收藏" : "未收藏",
+    }),
+    create("span", { class: "pv-preview-pill", text: `评分 ${Number(preview.score || 0).toFixed(1)}` }),
+    create("span", {
+      class: "pv-preview-pill",
+      text: preview.model_scope?.length ? preview.model_scope.join(" / ") : "不限模型",
+    }),
+  ]);
+  const heroTags = create(
+    "div",
+    { class: "pv-preview-tags" },
+    (preview.tags || []).map((tag) => create("span", { class: "pv-card-tag", text: tag })),
+  );
+  const thumb = create("img", {
+    class: "pv-preview-thumb",
+    alt: "thumbnail",
+    src: preview.thumbnail_url || "",
+  });
+  const thumbEmpty = create("div", { class: "pv-preview-thumb pv-preview-thumb-empty", text: "暂无缩略图" });
+  thumb.onerror = () => {
+    thumb.replaceWith(thumbEmpty);
+  };
+  if (!preview.thumbnail_url) {
+    thumb.replaceWith(thumbEmpty);
+  }
+  thumb.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openImageLightbox(preview.thumbnail_url, preview.title || "图片预览");
+  });
+
+  const hero = create("div", { class: "pv-preview-hero" }, [
+    create("div", { class: "pv-preview-hero-main" }, [
+      create("div", { class: "pv-preview-title", text: preview.title || "未命名" }),
+      heroMeta,
+      heroStats,
+      heroTags,
+    ]),
+    create("div", { class: "pv-preview-hero-side" }, [preview.thumbnail_url ? thumb : thumbEmpty]),
+  ]);
+
+  const noticeText =
+    preview.match_source === "locked_missing_id_fallback_latest"
+      ? "当前为锁定模式，但条目 ID 为空；已按自动检索回退到最近更新记录。"
+      : preview.match_source === "locked_missing_id"
+        ? "当前为锁定模式，但条目 ID 为空；以下结果按自动检索预览。"
+      : preview.match_source === "fallback_latest"
+      ? "未命中当前条件，已回退到最近更新记录。"
+      : preview.match_source === "locked"
+        ? "当前预览来自已锁定条目。"
+        : "当前结果按节点条件命中。";
+  const noticeClass =
+    preview.match_source === "fallback_latest" || preview.match_source === "locked_missing_id_fallback_latest"
+      ? "pv-preview-notice pv-preview-notice-warn"
+      : "pv-preview-notice";
+
+  const body = create("div", { class: "pv-detail-body pv-preview-body" }, [
+    hero,
+    create("div", { class: noticeClass, text: noticeText }),
+    create("div", { class: "pv-preview-section" }, [
+      create("div", { class: "pv-detail-title", text: "正向提示词" }),
+      create("pre", { class: "pv-pre pv-preview-code", text: preview.positive || "" }),
+    ]),
+    create("div", { class: "pv-preview-section" }, [
+      create("div", { class: "pv-detail-title", text: "负向提示词" }),
+      create("pre", { class: "pv-pre pv-preview-code", text: preview.negative || "" }),
+    ]),
+  ]);
+
+  const lockButton = create("button", {
+    class: "pv-btn pv-primary",
+    text: "锁定到当前节点",
+  });
+  if (alreadyLocked) lockButton.textContent = "已锁定当前条目";
+  lockButton.disabled = alreadyLocked;
+  lockButton.addEventListener("click", () => {
+    setNodeWidgetValue(node, "mode", "locked");
+    setNodeWidgetValue(node, "entry_id", preview.id || "");
+    if (preview.title) node.title = `检索: ${preview.title}`;
+    markNodeDirty();
+    toast(`已锁定：${preview.title || "未命名"}`, "success");
+    closePreview();
+  });
+
+  const footer = create("div", { class: "pv-detail-actions" }, [
+    lockButton,
+    create("button", { class: "pv-btn", text: "关闭", onclick: closePreview }),
+  ]);
+
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) closePreview();
+  });
+  modal.appendChild(header);
+  modal.appendChild(body);
+  modal.appendChild(footer);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+}
+
+function setupPromptVaultQueryNode(node) {
+  if (!node || node._pvQueryPreviewBound) return;
+  node._pvQueryPreviewBound = true;
+  node.addWidget("button", "查询预览", "查询预览", async () => {
+    try {
+      const preview = await resolveQueryPreview(node);
+      if (!preview?.id) {
+        toast("未找到匹配记录", "info");
+        return;
+      }
+      openQueryPreviewModal(node, preview);
+    } catch (error) {
+      toast(`查询预览失败: ${error}`, "error");
+    }
+  });
 }
 
 let _llmModuleReady = null;
@@ -1354,12 +1654,13 @@ function openManager() {
         node.pos = [Math.round(viewW * 0.5 / scale - offset[0]), Math.round(viewH * 0.5 / scale - offset[1])];
         node.widgets?.forEach((widget) => {
           if (widget.name === "query") widget.value = "";
-          if (widget.name === "title") widget.value = item.title || "";
-          if (widget.name === "tags") widget.value = (item.tags || []).join(",");
-          if (widget.name === "model") widget.value = (item.model_scope || []).join(",");
-          if (widget.name === "top_k") widget.value = 1;
-          if (widget.name === "variables_json") widget.value = "{}";
+          if (widget.name === "title") widget.value = "";
+          if (widget.name === "tags") widget.value = "";
+          if (widget.name === "model") widget.value = "";
+          if (widget.name === "mode") widget.value = "locked";
+          if (widget.name === "entry_id") widget.value = item.id || "";
         });
+        if (item.title) node.title = `检索: ${item.title}`;
         graph.add(node);
         app.graph?.setDirtyCanvas?.(true, true);
         app.canvas?.setDirty?.(true, true);
@@ -1661,6 +1962,9 @@ if (!globalThis[GUARD_KEY]) {
       }, 500);
     },
     nodeCreated(node) {
+      if (node.comfyClass === "PromptVaultQuery") {
+        setupPromptVaultQueryNode(node);
+      }
       if (node.comfyClass === "ModelResolution") {
         setupModelResolutionNode(node);
       }

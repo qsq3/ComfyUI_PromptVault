@@ -609,7 +609,7 @@ def _debug_dump_png_meta(
 
 
 def _first_five_chars(text):
-    return (text or "").strip()[:5]
+    return (text or "").strip()[:5].strip()
 
 
 def _run_async_sync(awaitable):
@@ -666,6 +666,7 @@ def _maybe_auto_fill_with_llm(title, tags, positive, negative, auto_generate, au
     client = LLMClient(config)
     changed = False
     try:
+        _run_async_sync(client.test_connection())
         if need_title and need_tags:
             result = _run_async_sync(
                 client.auto_title_and_tags(
@@ -709,6 +710,8 @@ def _maybe_auto_fill_with_llm(title, tags, positive, negative, auto_generate, au
 
 
 class PromptVaultQueryNode:
+    SEARCH_LIMIT = 10
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -717,8 +720,8 @@ class PromptVaultQueryNode:
                 "title": ("STRING", {"default": "", "multiline": False}),
                 "tags": ("STRING", {"default": "", "multiline": False}),
                 "model": ("STRING", {"default": "", "multiline": False}),
-                "top_k": ("INT", {"default": 1, "min": 1, "max": 50, "step": 1}),
-                "variables_json": ("STRING", {"default": "{}", "multiline": True}),
+                "mode": (["auto", "locked"], {"default": "auto"}),
+                "entry_id": ("STRING", {"default": "", "multiline": False}),
             }
         }
 
@@ -727,25 +730,44 @@ class PromptVaultQueryNode:
     FUNCTION = "run"
     CATEGORY = "PromptVault"
 
-    def run(self, query, title, tags, model, top_k, variables_json="{}"):
+    def run(self, mode, entry_id, query, title, tags, model):
         store = PromptVaultStore.get()
         tag_list = [t.strip() for t in (tags or "").split(",") if t.strip()]
         title_kw = (title or "").strip()
         query_kw = (query or "").strip()
+        locked_entry_id = (entry_id or "").strip()
 
-        variables_override = {}
-        try:
-            parsed = json.loads(variables_json or "{}")
-            if isinstance(parsed, dict):
-                variables_override = parsed
-        except Exception:
-            pass
+        if mode == "locked" and locked_entry_id:
+            try:
+                entry = store.get_entry(locked_entry_id)
+            except Exception as exc:
+                logger.error("get_entry failed in locked mode: %s", exc)
+                return ("", "")
+            logger.debug(
+                "selected_entry_locked: id=%s title=%s version=%s",
+                entry.get("id"),
+                entry.get("title"),
+                entry.get("version"),
+            )
+            try:
+                assembled = assemble_entry(store=store, entry=entry)
+                logger.debug(
+                    "assembled_len_locked: positive=%d negative=%d",
+                    len(str(assembled.get("positive", "") or "")),
+                    len(str(assembled.get("negative", "") or "")),
+                )
+                return (
+                    str(assembled.get("positive", "") or ""),
+                    str(assembled.get("negative", "") or ""),
+                )
+            except Exception as exc:
+                logger.warning("assemble failed in locked mode, fallback raw: %s", exc)
+                raw = entry.get("raw", {}) if isinstance(entry, dict) else {}
+                return (str(raw.get("positive", "") or ""), str(raw.get("negative", "") or ""))
 
         search_q = query_kw
         if title_kw:
             search_q = f"{title_kw} {query_kw}".strip()
-
-        limit = max(1, int(top_k))
 
         def _do_search(qv, tags_v, model_v, stage):
             try:
@@ -754,7 +776,7 @@ class PromptVaultQueryNode:
                     tags=tags_v,
                     model=model_v,
                     status="active",
-                    limit=limit,
+                    limit=self.SEARCH_LIMIT,
                 )
                 logger.debug("stage=%s hits=%d q=%r tags=%s model=%r", stage, len(rows), qv, tags_v, model_v)
                 return rows
@@ -801,7 +823,7 @@ class PromptVaultQueryNode:
                       entry.get("id"), entry.get("title"), entry.get("version"))
 
         try:
-            assembled = assemble_entry(store=store, entry=entry, variables_override=variables_override)
+            assembled = assemble_entry(store=store, entry=entry)
             logger.debug("assembled_len: positive=%d negative=%d",
                          len(str(assembled.get("positive", "") or "")),
                          len(str(assembled.get("negative", "") or "")))
@@ -815,6 +837,16 @@ class PromptVaultQueryNode:
             return (str(raw.get("positive", "") or ""), str(raw.get("negative", "") or ""))
 
 class PromptVaultSaveNode:
+    @staticmethod
+    def _default_auto_generate_enabled():
+        try:
+            store = PromptVaultStore.get()
+            config = normalize_config(store.get_llm_config())
+            return bool(config.get("enabled"))
+        except Exception as exc:
+            logger.debug("PromptVaultSaveNode default auto_generate fallback: %s", exc)
+            return False
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -825,7 +857,7 @@ class PromptVaultSaveNode:
             "optional": {
                 "tags": ("STRING", {"default": "", "multiline": False}),
                 "model": ("STRING", {"default": "", "multiline": False}),
-                "auto_generate": ("BOOLEAN", {"default": False}),
+                "auto_generate": ("BOOLEAN", {"default": cls._default_auto_generate_enabled()}),
                 "auto_generate_mode": (["auto", "title_only", "tags_only", "title_and_tags"], {"default": "title_and_tags"}),
             },
             "hidden": {
@@ -846,7 +878,7 @@ class PromptVaultSaveNode:
         title,
         tags="",
         model="",
-        auto_generate=True,
+        auto_generate=False,
         auto_generate_mode="auto",
         prompt=None,
         extra_pnginfo=None,
@@ -881,6 +913,8 @@ class PromptVaultSaveNode:
             data,
         )
         positive = data.get("positive", "")
+        if not str(positive or "").strip():
+            return ("", "保存失败: 未提取到正向提示词，请确认输入图像或工作流元数据")
         fallback5 = _first_five_chars(positive)
 
         final_title = (title or "").strip()

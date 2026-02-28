@@ -345,6 +345,7 @@
           request("/llm/test", { method: "POST", body: JSON.stringify(testConfig) })
             .then(function (res) {
               if (res.ok) {
+                fieldEnabled.checked = true;
                 testResult.textContent = "✓ 连接成功，模型: " + (res.model || "unknown");
                 testResult.style.color = "#2ecc71";
               } else {

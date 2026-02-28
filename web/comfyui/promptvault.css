@@ -392,7 +392,7 @@
   font-size: 14px;
   font-weight: 600;
   line-height: 1.35;
-  color: #5b8def;
+  color: #d8b36a;
 }
 .pv-card-title-row {
   display: flex;
@@ -503,6 +503,176 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+.pv-preview-modal {
+  width: min(860px, 94vw);
+  height: auto;
+  max-height: min(780px, 90vh);
+}
+.pv-preview-body {
+  overflow: auto;
+  max-height: calc(min(780px, 90vh) - 120px);
+  padding: 14px;
+}
+.pv-preview-meta {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.pv-preview-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at top right, rgba(91, 141, 239, 0.18), transparent 38%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02));
+}
+.pv-preview-hero-main {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.pv-preview-hero-side {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+}
+.pv-preview-title {
+  font-size: 19px;
+  line-height: 1.25;
+  font-weight: 700;
+  color: #d8b36a;
+  word-break: break-word;
+}
+.pv-preview-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pv-preview-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.pv-preview-pill-hot {
+  background: rgba(216, 179, 106, 0.16);
+  border-color: rgba(216, 179, 106, 0.26);
+  color: #f2d7a2;
+}
+.pv-preview-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pv-preview-thumb {
+  width: 180px;
+  aspect-ratio: 4 / 5;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #0c0f13;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+  cursor: zoom-in;
+}
+.pv-preview-thumb-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 12px;
+  text-align: center;
+  padding: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)),
+    repeating-linear-gradient(45deg, rgba(255,255,255,0.02) 0 10px, transparent 10px 20px);
+}
+.pv-preview-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.pv-preview-notice {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(91, 141, 239, 0.2);
+  background: rgba(91, 141, 239, 0.08);
+  color: #cfe0ff;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.pv-preview-notice-warn {
+  border-color: rgba(216, 179, 106, 0.28);
+  background: rgba(216, 179, 106, 0.1);
+  color: #f0d8a3;
+}
+.pv-preview-code {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+}
+.pv-preview-modal .pv-detail-actions {
+  justify-content: flex-end;
+  padding: 10px 18px 18px;
+  margin-top: auto;
+}
+.pv-image-lightbox {
+  z-index: 10020;
+}
+.pv-image-lightbox-modal {
+  width: min(1180px, 96vw);
+  height: min(92vh, 980px);
+  background: #0b0d10;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  box-shadow: 0 18px 52px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.pv-image-lightbox-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background:
+    radial-gradient(circle at top, rgba(91, 141, 239, 0.08), transparent 35%),
+    #0b0d10;
+}
+.pv-image-lightbox-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 10px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.35);
+}
+@media (max-width: 760px) {
+  .pv-preview-hero {
+    grid-template-columns: 1fr;
+  }
+  .pv-preview-hero-side {
+    justify-content: flex-start;
+  }
+  .pv-preview-thumb {
+    width: min(180px, 48vw);
+  }
 }
 .pv-detail-actions {
   display: flex;
