@@ -1,5 +1,6 @@
 import base64
 import json
+from datetime import datetime
 
 from aiohttp import web
 
@@ -37,6 +38,11 @@ def _decode_thumbnail_b64(payload):
     if isinstance(w, (int, float)) and isinstance(h, (int, float)):
         payload["thumbnail_width"] = int(w)
         payload["thumbnail_height"] = int(h)
+
+
+def _download_name(ext):
+    stamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    return f"promptvault-export-{stamp}.{ext}"
 
 
 def setup_routes():
@@ -87,6 +93,9 @@ def setup_routes():
         tags = request.query.get("tags", "")
         model = request.query.get("model", "")
         status = request.query.get("status", "active")
+        sort = request.query.get("sort", "updated_desc")
+        favorite_only = request.query.get("favorite_only", "").strip().lower() in {"1", "true", "yes", "on"}
+        has_thumbnail = request.query.get("has_thumbnail", "").strip().lower() in {"1", "true", "yes", "on"}
         try:
             limit = max(1, min(200, int(request.query.get("limit", "20"))))
         except (TypeError, ValueError):
@@ -97,9 +106,38 @@ def setup_routes():
             offset = 0
 
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-        items = store.search_entries(q=q, tags=tag_list, model=model, status=status, limit=limit, offset=offset)
-        total = store.count_entries(q=q, tags=tag_list, model=model, status=status)
-        return _json_response({"items": items, "limit": limit, "offset": offset, "total": total})
+        items = store.search_entries(
+            q=q,
+            tags=tag_list,
+            model=model,
+            status=status,
+            limit=limit,
+            offset=offset,
+            sort=sort,
+            favorite_only=favorite_only,
+            has_thumbnail=has_thumbnail,
+        )
+        total = store.count_entries(
+            q=q,
+            tags=tag_list,
+            model=model,
+            status=status,
+            favorite_only=favorite_only,
+            has_thumbnail=has_thumbnail,
+        )
+        return _json_response(
+            {
+                "items": items,
+                "limit": limit,
+                "offset": offset,
+                "total": total,
+                "sort": sort,
+                "filters": {
+                    "favorite_only": favorite_only,
+                    "has_thumbnail": has_thumbnail,
+                },
+            }
+        )
 
     @routes.post("/promptvault/entries/purge_deleted")
     async def purge_deleted(_request):
@@ -222,6 +260,75 @@ def setup_routes():
             model_hint=model_hint,
         )
         return _json_response(assembled)
+
+    @routes.get("/promptvault/export")
+    async def export_promptvault(request):
+        store = PromptVaultStore.get()
+        fmt = str(request.query.get("format", "json") or "json").strip().lower()
+        if fmt == "json":
+            text = json.dumps(store.export_bundle(), ensure_ascii=False, indent=2)
+            return web.Response(
+                text=text,
+                content_type="application/json",
+                headers={"Content-Disposition": f'attachment; filename="{_download_name("json")}"'},
+            )
+        if fmt == "csv":
+            text = store.export_bundle_csv()
+            return web.Response(
+                text=text,
+                content_type="text/csv",
+                headers={"Content-Disposition": f'attachment; filename="{_download_name("csv")}"'},
+            )
+        return _bad_request("仅支持 json 或 csv 格式导出")
+
+    @routes.post("/promptvault/import")
+    async def import_promptvault(request):
+        store = PromptVaultStore.get()
+        content_type = (request.content_type or "").lower()
+        conflict_strategy = "merge"
+
+        if content_type.startswith("multipart/"):
+            form = await request.post()
+            upload = form.get("file")
+            conflict_strategy = str(form.get("conflict_strategy", "merge") or "merge").strip().lower()
+            fmt = str(form.get("format", "") or "").strip().lower()
+            if not upload or not getattr(upload, "file", None):
+                return _bad_request("缺少导入文件")
+            raw_bytes = upload.file.read()
+            if not fmt:
+                filename = str(getattr(upload, "filename", "") or "").lower()
+                if filename.endswith(".csv"):
+                    fmt = "csv"
+                else:
+                    fmt = "json"
+        else:
+            try:
+                payload = await request.json()
+            except Exception:
+                return _bad_request("无法解析导入请求")
+            if not isinstance(payload, dict):
+                return _bad_request("请求体必须是 JSON 对象")
+            fmt = str(payload.get("format", "json") or "json").strip().lower()
+            conflict_strategy = str(payload.get("conflict_strategy", "merge") or "merge").strip().lower()
+            raw_text = str(payload.get("content", "") or "")
+            raw_bytes = raw_text.encode("utf-8")
+
+        if conflict_strategy != "merge":
+            return _bad_request("当前仅支持 merge 冲突策略")
+        try:
+            text = raw_bytes.decode("utf-8-sig")
+        except Exception:
+            return _bad_request("导入文件必须为 UTF-8 编码")
+
+        try:
+            if fmt == "csv":
+                result = store.import_csv_text(text, conflict_strategy=conflict_strategy)
+            else:
+                bundle = json.loads(text or "{}")
+                result = store.import_bundle(bundle, conflict_strategy=conflict_strategy)
+        except Exception as exc:
+            return _json_response({"error": str(exc)}, status=400)
+        return _json_response(result)
 
     @routes.post("/promptvault/fragments")
     async def upsert_fragment(request):

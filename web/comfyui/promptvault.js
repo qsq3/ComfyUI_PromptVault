@@ -98,9 +98,13 @@ function ensureStyle() {
 }
 
 async function request(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (!(options.body instanceof FormData) && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
   const response = await fetch(`/promptvault${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers,
   });
   if (!response.ok) {
     const text = await response.text();
@@ -214,32 +218,46 @@ function openManager() {
   const buttonSearch = create("button", { class: "pv-btn pv-primary", text: "\u68c0\u7d22" });
   const buttonPurge = create("button", { class: "pv-btn pv-danger", text: "\u6e05\u7a7a\u56de\u6536\u7ad9" });
   const buttonNew = create("button", { class: "pv-btn", text: "\u65b0\u5efa" });
+  const buttonExportCsv = create("button", { class: "pv-btn", text: "\u5bfc\u51fa CSV" });
+  const buttonImport = create("button", { class: "pv-btn", text: "\u5bfc\u5165" });
+  const importInput = create("input", { type: "file", accept: ".json,.csv,application/json,text/csv" });
+  importInput.style.display = "none";
   const buttonLLMSettings = create("button", { class: "pv-btn", text: "LLM \u8bbe\u7f6e" });
   const buttonToggleSidebar = create("button", { class: "pv-btn", text: "\u6807\u7b7e\u680f" });
   const paginationInfo = create("span", { class: "pv-toolbar-page-info", text: "1 / 1 \u9875" });
   const buttonPrevPage = create("button", { class: "pv-btn pv-small", text: "\u4e0a\u4e00\u9875" });
   const buttonNextPage = create("button", { class: "pv-btn pv-small", text: "\u4e0b\u4e00\u9875" });
   const buttonClose = create("button", { class: "pv-btn pv-danger", text: "\u5173\u95ed" });
-  const title = create("div", { class: "pv-title" }, [titleLabel, buttonClose]);
-  const toolbarSpacer = create("div", { class: "pv-toolbar-spacer" });
-  const toolbar = create("div", { class: "pv-toolbar" }, [
+  const titleActions = create("div", { class: "pv-title-actions" }, [
+    buttonNew,
+    buttonImport,
+    buttonExportCsv,
+    buttonLLMSettings,
+    buttonToggleSidebar,
+    selectStatus,
+    buttonPurge,
+    buttonClose,
+  ]);
+  const title = create("div", { class: "pv-title" }, [
+    titleLabel,
+    titleActions,
+  ]);
+  const searchSpacer = create("div", { class: "pv-toolbar-spacer" });
+  const toolbar = create("div", { class: "pv-toolbar pv-toolbar-search" }, [
     inputQuery,
     inputTags,
     inputModel,
     buttonSearch,
-    buttonNew,
-    toolbarSpacer,
+    searchSpacer,
     paginationInfo,
     buttonPrevPage,
     buttonNextPage,
-    selectStatus,
-    buttonPurge,
-    buttonLLMSettings,
-    buttonToggleSidebar,
   ]);
 
   const sidebar = create("div", { class: "pv-sidebar" });
-  const list = create("div", { class: "pv-list" });
+  const resultControls = create("div", { class: "pv-results-toolbar" });
+  const list = create("div", { class: "pv-list pv-card-grid" });
+  const resultsPane = create("div", { class: "pv-results-pane" }, [resultControls, list]);
   let currentPositive = "";
   const buttonCopyPositive = create("button", { class: "pv-btn pv-small", text: "\u590d\u5236\u6b63\u5411\u63d0\u793a\u8bcd" });
   buttonCopyPositive.addEventListener("click", async () => {
@@ -262,7 +280,7 @@ function openManager() {
     buttonCopyPositive,
   ]);
   const detail = create("div", { class: "pv-detail" }, [detailHeader, detailBody]);
-  const body = create("div", { class: "pv-body" }, [sidebar, list, detail]);
+  const body = create("div", { class: "pv-body" }, [sidebar, resultsPane, detail]);
 
   const statusBarLeft = create("span", { class: "pv-statusbar-left", text: "\u5c31\u7eea" });
   const statusBarRight = create("span", { class: "pv-statusbar-right", text: "" });
@@ -273,7 +291,14 @@ function openManager() {
   let sidebarVisible = false;
   let currentOffset = 0;
   let currentTotal = 0;
-  const pageLimit = 10;
+  let selectedCardId = "";
+  const pageLimit = 12;
+  const quickFilters = {
+    favorite_only: false,
+    has_thumbnail: false,
+  };
+  let currentSort = "updated_desc";
+  let currentViewMode = "card_compact";
 
   sidebar.style.display = "none";
   body.classList.add("pv-body-no-sidebar");
@@ -282,8 +307,104 @@ function openManager() {
     if (document.body.contains(overlay)) document.body.removeChild(overlay);
   }
 
+  function setStatus(leftText, rightText = "") {
+    statusBarLeft.textContent = leftText;
+    statusBarRight.textContent = rightText;
+  }
+
+  async function downloadExport(format) {
+    const upper = format.toUpperCase();
+    setStatus(`正在导出 ${upper}...`);
+    try {
+      const response = await fetch(`/promptvault/export?format=${encodeURIComponent(format)}`);
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      const dispo = response.headers.get("Content-Disposition") || "";
+      const match = dispo.match(/filename="?([^"]+)"?/i);
+      anchor.href = url;
+      anchor.download = match?.[1] || `promptvault-export.${format}`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      toast(`${upper} 导出完成`, "success");
+      setStatus(`${upper} 导出完成`);
+    } catch (error) {
+      toast(`导出失败: ${error}`, "error");
+      setStatus(`导出失败: ${error}`);
+    }
+  }
+
+  async function uploadImport(file) {
+    const name = file?.name || "";
+    if (!file) return;
+    const format = name.toLowerCase().endsWith(".csv") ? "csv" : "json";
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("format", format);
+    formData.append("conflict_strategy", "merge");
+    setStatus(`正在导入 ${name}...`, "merge");
+    try {
+      const result = await request("/import", { method: "POST", body: formData });
+      const summary = `创建 ${result.created || 0}，更新 ${result.updated || 0}，跳过 ${result.skipped || 0}，错误 ${(result.errors || []).length}`;
+      toast(`导入完成: ${summary}`, (result.errors || []).length ? "info" : "success", 5000);
+      setStatus(`导入完成: ${summary}`);
+      if ((result.errors || []).length) {
+        const brief = result.errors.slice(0, 5).map((item) => `${item.record_type}/${item.id}: ${item.error}`).join("\n");
+        alert(`导入结果\n\n${summary}\n\n错误明细:\n${brief}`);
+      } else {
+        alert(`导入结果\n\n${summary}`);
+      }
+      await loadTags();
+      await reloadList();
+    } catch (error) {
+      toast(`导入失败: ${error}`, "error", 5000);
+      setStatus(`导入失败: ${error}`);
+    } finally {
+      importInput.value = "";
+    }
+  }
+
   function resetPagination() {
     currentOffset = 0;
+  }
+
+  function activeFilterSummary() {
+    const labels = [];
+    if (quickFilters.favorite_only) labels.push("仅收藏");
+    if (quickFilters.has_thumbnail) labels.push("有缩略图");
+    return labels.join(" · ");
+  }
+
+  const quickFilterFavorite = create("button", { class: "pv-filter-chip", text: "仅收藏" });
+  const quickFilterThumb = create("button", { class: "pv-filter-chip", text: "有缩略图" });
+  const buttonClearFilters = create("button", { class: "pv-btn pv-small", text: "清空筛选" });
+  const sortSelect = create(
+    "select",
+    { class: "pv-input pv-results-sort", title: "排序方式" },
+    [
+      create("option", { value: "updated_desc", text: "最近更新" }),
+      create("option", { value: "score_desc", text: "评分优先" }),
+      create("option", { value: "favorite_desc", text: "收藏优先" }),
+    ],
+  );
+  const filterHint = create("span", { class: "pv-results-hint", text: "缩略图优先浏览" });
+  resultControls.appendChild(create("div", { class: "pv-filter-chip-row" }, [
+    quickFilterFavorite,
+    quickFilterThumb,
+    buttonClearFilters,
+    filterHint,
+  ]));
+  resultControls.appendChild(sortSelect);
+
+  function refreshQuickFilterUI() {
+    quickFilterFavorite.classList.toggle("pv-filter-chip-active", !!quickFilters.favorite_only);
+    quickFilterThumb.classList.toggle("pv-filter-chip-active", !!quickFilters.has_thumbnail);
+    sortSelect.value = currentSort;
   }
 
   function updatePaginationUI(itemsCount = 0) {
@@ -296,6 +417,88 @@ function openManager() {
     buttonPrevPage.disabled = currentOffset <= 0;
     buttonNextPage.disabled = currentOffset + itemsCount >= total;
     statusBarLeft.textContent = `共 ${total} 条记录` + (total ? ` · 显示 ${start}-${end}` : "") + (currentStatus === "deleted" ? "（回收站）" : "");
+  }
+
+  function updatePaginationUI(itemsCount = 0) {
+    const total = Math.max(0, currentTotal);
+    const page = total ? Math.floor(currentOffset / pageLimit) + 1 : 1;
+    const totalPages = Math.max(1, Math.ceil(total / pageLimit));
+    const start = total ? currentOffset + 1 : 0;
+    const end = total ? Math.min(currentOffset + itemsCount, total) : 0;
+    paginationInfo.textContent = `${page} / ${totalPages} 页`;
+    buttonPrevPage.disabled = currentOffset <= 0;
+    buttonNextPage.disabled = currentOffset + itemsCount >= total;
+    const filterSummary = activeFilterSummary();
+    const sortSummary =
+      currentSort === "score_desc" ? "评分优先" :
+      currentSort === "favorite_desc" ? "收藏优先" :
+      "最近更新";
+    statusBarLeft.textContent = `共 ${total} 条记录`
+      + (total ? ` · 显示 ${start}-${end}` : "")
+      + (currentStatus === "deleted" ? "（回收站）" : "")
+      + (filterSummary ? ` · 筛选: ${filterSummary}` : "")
+      + ` · 排序: ${sortSummary}`;
+  }
+
+  const viewList = create("button", { class: "pv-filter-chip", text: "列表" });
+  const viewCardCompact = create("button", { class: "pv-filter-chip", text: "卡片" });
+  const viewModeGroup = create("div", { class: "pv-filter-chip-row" }, [viewList, viewCardCompact]);
+  resultControls.appendChild(viewModeGroup);
+
+  quickFilterFavorite.textContent = "仅收藏";
+  quickFilterThumb.textContent = "有缩略图";
+  buttonClearFilters.textContent = "清空筛选";
+  filterHint.textContent = "可切换列表与卡片视图";
+  sortSelect.title = "排序方式";
+  if (sortSelect.options[0]) sortSelect.options[0].textContent = "最近更新";
+  if (sortSelect.options[1]) sortSelect.options[1].textContent = "评分优先";
+  if (sortSelect.options[2]) sortSelect.options[2].textContent = "收藏优先";
+
+  refreshQuickFilterUI = function () {
+    quickFilterFavorite.classList.toggle("pv-filter-chip-active", !!quickFilters.favorite_only);
+    quickFilterThumb.classList.toggle("pv-filter-chip-active", !!quickFilters.has_thumbnail);
+    viewList.classList.toggle("pv-filter-chip-active", currentViewMode === "list");
+    viewCardCompact.classList.toggle("pv-filter-chip-active", currentViewMode === "card_compact");
+    sortSelect.value = currentSort;
+  };
+
+  updatePaginationUI = function (itemsCount = 0) {
+    const total = Math.max(0, currentTotal);
+    const page = total ? Math.floor(currentOffset / pageLimit) + 1 : 1;
+    const totalPages = Math.max(1, Math.ceil(total / pageLimit));
+    const start = total ? currentOffset + 1 : 0;
+    const end = total ? Math.min(currentOffset + itemsCount, total) : 0;
+    paginationInfo.textContent = `${page} / ${totalPages} 页`;
+    buttonPrevPage.disabled = currentOffset <= 0;
+    buttonNextPage.disabled = currentOffset + itemsCount >= total;
+    const activeFilters = [];
+    if (quickFilters.favorite_only) activeFilters.push("仅收藏");
+    if (quickFilters.has_thumbnail) activeFilters.push("有缩略图");
+    const viewLabel = currentViewMode === "list" ? "列表" : "卡片";
+    const sortLabel =
+      currentSort === "score_desc" ? "评分优先" :
+      currentSort === "favorite_desc" ? "收藏优先" :
+      "最近更新";
+    statusBarLeft.textContent = `共 ${total} 条记录`
+      + (total ? ` · 显示 ${start}-${end}` : "")
+      + (currentStatus === "deleted" ? "（回收站）" : "")
+      + (activeFilters.length ? ` · 筛选: ${activeFilters.join(" / ")}` : "")
+      + ` · 视图: ${viewLabel}`
+      + ` · 排序: ${sortLabel}`;
+  };
+
+  function applyResultViewMode() {
+    list.classList.remove("pv-card-grid", "pv-card-grid-compact", "pv-list-mode");
+    if (currentViewMode === "list") {
+      list.classList.add("pv-list-mode");
+      detail.style.display = "";
+      body.style.gridTemplateColumns = sidebarVisible ? "" : "";
+      return;
+    }
+    list.classList.add("pv-card-grid");
+    list.classList.add("pv-card-grid-compact");
+    detail.style.display = "none";
+    body.style.gridTemplateColumns = sidebarVisible ? "180px 1fr" : "1fr";
   }
 
   buttonLLMSettings.addEventListener("click", async () => {
@@ -312,6 +515,7 @@ function openManager() {
       sidebar.style.display = "none";
       body.classList.add("pv-body-no-sidebar");
     }
+    applyResultViewMode();
   });
 
   selectStatus.addEventListener("change", () => {
@@ -345,6 +549,50 @@ function openManager() {
     } catch (error) {
       toast(`\u6e05\u7a7a\u56de\u6536\u7ad9\u5931\u8d25: ${error}`, "error");
     }
+  });
+  buttonExportCsv.addEventListener("click", () => {
+    downloadExport("csv").catch((e) => toast(String(e), "error"));
+  });
+  buttonImport.addEventListener("click", () => importInput.click());
+  importInput.addEventListener("change", async () => {
+    if (importInput.files?.[0]) {
+      await uploadImport(importInput.files[0]);
+    }
+  });
+  quickFilterFavorite.addEventListener("click", () => {
+    quickFilters.favorite_only = !quickFilters.favorite_only;
+    refreshQuickFilterUI();
+    resetPagination();
+    reloadList().catch((e) => toast(String(e), "error"));
+  });
+  quickFilterThumb.addEventListener("click", () => {
+    quickFilters.has_thumbnail = !quickFilters.has_thumbnail;
+    refreshQuickFilterUI();
+    resetPagination();
+    reloadList().catch((e) => toast(String(e), "error"));
+  });
+  buttonClearFilters.addEventListener("click", () => {
+    quickFilters.favorite_only = false;
+    quickFilters.has_thumbnail = false;
+    refreshQuickFilterUI();
+    resetPagination();
+    reloadList().catch((e) => toast(String(e), "error"));
+  });
+  sortSelect.addEventListener("change", () => {
+    currentSort = sortSelect.value || "updated_desc";
+    refreshQuickFilterUI();
+    resetPagination();
+    reloadList().catch((e) => toast(String(e), "error"));
+  });
+  viewList.addEventListener("click", () => {
+    currentViewMode = "list";
+    refreshQuickFilterUI();
+    reloadList().catch((e) => toast(String(e), "error"));
+  });
+  viewCardCompact.addEventListener("click", () => {
+    currentViewMode = "card_compact";
+    refreshQuickFilterUI();
+    reloadList().catch((e) => toast(String(e), "error"));
   });
 
   async function loadTags() {
@@ -432,16 +680,20 @@ function openManager() {
     });
   }
 
-  function renderDetail(entry, assembled) {
+  function renderDetailContent(targetBody, entry, assembled, updateStatus = true) {
     currentPositive = assembled.positive || "";
-    statusBarRight.textContent = `\u5f53\u524d: ${entry.title || "\u672a\u547d\u540d"} | ID: ${(entry.id || "").slice(0, 8)}\u2026 | v${entry.version || 1}`;
+    if (updateStatus) {
+      statusBarRight.textContent = `\u5f53\u524d: ${entry.title || "\u672a\u547d\u540d"} | ID: ${(entry.id || "").slice(0, 8)}\u2026 | v${entry.version || 1}`;
+    }
     const params = entry.params || {};
+    const matchReasons = entry.match_reasons || assembled.match_reasons || [];
     const tableRows = [
       ["\u6807\u9898", entry.title || ""],
       ["ID", entry.id || ""],
       ["\u6807\u7b7e", (entry.tags || []).join(", ")],
       ["\u6a21\u578b", (entry.model_scope || []).join(", ")],
       ["\u7248\u672c", String(entry.version || 1)],
+      ["命中原因", matchReasons.length ? matchReasons.join(" / ") : "无"],
       { k1: "steps", v1: String(params.steps ?? ""), k2: "cfg", v2: String(params.cfg ?? "") },
       { k1: "sampler", v1: String(params.sampler ?? ""), k2: "scheduler", v2: String(params.scheduler ?? "") },
       ["seed", String(params.seed ?? "")],
@@ -485,6 +737,66 @@ function openManager() {
       thumb.replaceWith(create("div", { class: "pv-empty", text: "\u6682\u65e0\u7f29\u7565\u56fe" }));
     };
 
+    const favoriteButton = create("button", {
+      class: `pv-btn pv-small ${entry.favorite ? "pv-primary" : ""}`,
+      text: entry.favorite ? "★ 已收藏" : "☆ 收藏",
+      title: "切换收藏状态",
+    });
+    const scoreOptions = [0, 1, 2, 3, 4, 5];
+    const scoreSelect = create(
+      "select",
+      { class: "pv-input pv-detail-score", title: "评分" },
+      scoreOptions.map((value) => create("option", { value: String(value), text: `评分 ${value}` })),
+    );
+    scoreSelect.value = String(Math.max(0, Math.min(5, Math.round(Number(entry.score || 0)))));
+    scoreSelect.style.display = "none";
+    const currentScore = Math.max(0, Math.min(5, Math.round(Number(entry.score || 0))));
+    const scoreStars = create("div", { class: "pv-detail-stars", title: "评分" });
+    const detailActions = create("div", { class: "pv-detail-actions" }, [
+      favoriteButton,
+      scoreStars,
+      scoreSelect,
+    ]);
+
+    const refreshDetailMeta = async (patch) => {
+      try {
+        await request(`/entries/${encodeURIComponent(entry.id)}`, {
+          method: "PUT",
+          body: JSON.stringify(patch),
+        });
+        const full = await request(`/entries/${encodeURIComponent(entry.id)}`);
+        full.match_reasons = entry.match_reasons || [];
+        const freshAssembled = await request("/assemble", {
+          method: "POST",
+          body: JSON.stringify({ entry_id: entry.id, variables_override: {} }),
+        });
+        freshAssembled.match_reasons = entry.match_reasons || [];
+        renderDetailContent(targetBody, full, freshAssembled, updateStatus);
+        await reloadList();
+      } catch (error) {
+        toast(`更新失败: ${error}`, "error");
+      }
+    };
+
+    favoriteButton.addEventListener("click", async () => {
+      await refreshDetailMeta({ favorite: entry.favorite ? 0 : 1 });
+    });
+    for (let value = 1; value <= 5; value += 1) {
+      const starButton = create("button", {
+        class: `pv-star-btn ${value <= currentScore ? "pv-star-btn-on" : ""}`,
+        text: "★",
+        title: `评分 ${value}`,
+      });
+      starButton.addEventListener("click", async () => {
+        const nextScore = value === currentScore ? 0 : value;
+        await refreshDetailMeta({ score: nextScore });
+      });
+      scoreStars.appendChild(starButton);
+    }
+    scoreSelect.addEventListener("change", async () => {
+      await refreshDetailMeta({ score: Number(scoreSelect.value || 0) });
+    });
+
     const btnCopyPos = create("button", { class: "pv-btn pv-small pv-copy-btn", text: "\u590d\u5236" });
     btnCopyPos.addEventListener("click", async () => {
       try {
@@ -521,10 +833,41 @@ function openManager() {
       ]),
     ]);
 
-    detailBody.textContent = "";
-    detailBody.appendChild(thumb);
-    detailBody.appendChild(table);
-    detailBody.appendChild(prompts);
+    targetBody.textContent = "";
+    targetBody.appendChild(thumb);
+    targetBody.appendChild(detailActions);
+    targetBody.appendChild(table);
+    targetBody.appendChild(prompts);
+  }
+
+  function renderDetail(entry, assembled) {
+    renderDetailContent(detailBody, entry, assembled, true);
+  }
+
+  function openDetailModal(entry, assembled) {
+    const overlayDetail = create("div", { class: "pv-overlay" });
+    const modalDetail = create("div", {
+      class: "pv-modal pv-editor",
+      role: "dialog",
+      "aria-label": "提示词详情",
+    });
+    const bodyDetail = create("div", { class: "pv-detail-body" });
+    const closeDetail = () => {
+      if (document.body.contains(overlayDetail)) document.body.removeChild(overlayDetail);
+    };
+    const titleBar = create("div", { class: "pv-title" }, [
+      create("span", { text: entry.title || "提示词详情" }),
+      create("button", { class: "pv-btn pv-danger", text: "关闭", onclick: closeDetail }),
+    ]);
+    const shell = create("div", { class: "pv-detail" }, [bodyDetail]);
+    renderDetailContent(bodyDetail, entry, assembled, false);
+    modalDetail.appendChild(titleBar);
+    modalDetail.appendChild(shell);
+    overlayDetail.appendChild(modalDetail);
+    overlayDetail.addEventListener("click", (event) => {
+      if (event.target === overlayDetail) closeDetail();
+    });
+    document.body.appendChild(overlayDetail);
   }
 
   function openEditor(entry) {
@@ -956,7 +1299,8 @@ function openManager() {
   }
 
   async function reloadList() {
-    list.textContent = "\u52a0\u8f7d\u4e2d...";
+    applyResultViewMode();
+    list.textContent = "加载中...";
     const params = new URLSearchParams();
     if (inputQuery.value.trim()) params.set("q", inputQuery.value.trim());
     if (inputTags.value.trim()) params.set("tags", inputTags.value.trim());
@@ -964,6 +1308,9 @@ function openManager() {
     params.set("status", currentStatus);
     params.set("limit", String(pageLimit));
     params.set("offset", String(currentOffset));
+    params.set("sort", currentSort);
+    if (quickFilters.favorite_only) params.set("favorite_only", "true");
+    if (quickFilters.has_thumbnail) params.set("has_thumbnail", "true");
 
     const result = await request(`/entries?${params.toString()}`);
     currentTotal = Math.max(0, Number(result.total || 0));
@@ -971,149 +1318,237 @@ function openManager() {
       currentOffset = Math.max(0, Math.floor((currentTotal - 1) / pageLimit) * pageLimit);
       return await reloadList();
     }
+
     list.textContent = "";
     const totalCount = result.items?.length || 0;
     updatePaginationUI(totalCount);
     if (!totalCount) {
-      list.appendChild(create("div", { class: "pv-empty", text: "\u6ca1\u6709\u627e\u5230\u8bb0\u5f55\u3002" }));
+      list.appendChild(create("div", { class: "pv-empty", text: "没有找到记录。" }));
+      refreshQuickFilterUI();
       return;
     }
 
+    const openQueryNode = (item) => {
+      try {
+        const graph = app.graph || app.canvas?.graph;
+        if (!graph?.add) {
+          toast("当前画布不可用，请先打开一个工作流", "error");
+          return;
+        }
+        const createNode = (type) => {
+          try { return globalThis.LiteGraph?.createNode?.(type) || null; }
+          catch (_e) { return null; }
+        };
+        const node = createNode("PromptVaultQuery") || createNode("提示词库检索");
+        if (!node) {
+          toast("未找到节点类型：PromptVaultQuery", "error");
+          return;
+        }
+        const canvas = app.canvas;
+        const ds = canvas?.ds;
+        const scale = ds?.scale || 1;
+        const offset = ds?.offset || [0, 0];
+        const canvasEl = canvas?.canvas;
+        const viewW = canvasEl?.width || 1200;
+        const viewH = canvasEl?.height || 800;
+        node.pos = [Math.round(viewW * 0.5 / scale - offset[0]), Math.round(viewH * 0.5 / scale - offset[1])];
+        node.widgets?.forEach((widget) => {
+          if (widget.name === "query") widget.value = "";
+          if (widget.name === "title") widget.value = item.title || "";
+          if (widget.name === "tags") widget.value = (item.tags || []).join(",");
+          if (widget.name === "model") widget.value = (item.model_scope || []).join(",");
+          if (widget.name === "top_k") widget.value = 1;
+          if (widget.name === "variables_json") widget.value = "{}";
+        });
+        graph.add(node);
+        app.graph?.setDirtyCanvas?.(true, true);
+        app.canvas?.setDirty?.(true, true);
+        closeManager();
+        toast("检索节点已添加到画布", "success");
+      } catch (error) {
+        toast(`创建节点失败: ${error}`, "error");
+      }
+    };
+
+    const openEditorForItem = async (item) => {
+      try {
+        const full = await request(`/entries/${encodeURIComponent(item.id)}`);
+        openEditor(full);
+      } catch (error) {
+        toast(`加载编辑数据失败: ${error}`, "error");
+      }
+    };
+
+    const updateItemStatus = async (item) => {
+      try {
+        if (currentStatus === "deleted") {
+          if (!confirm("确定还原记录？")) return;
+          await request(`/entries/${encodeURIComponent(item.id)}`, {
+            method: "PUT",
+            body: JSON.stringify({ status: "active" }),
+          });
+          toast("记录已还原", "success");
+        } else {
+          if (!confirm("确定删除？将移入回收站。")) return;
+          await request(`/entries/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+          toast("已移入回收站", "success");
+        }
+        await reloadList();
+      } catch (error) {
+        toast(`更新状态失败: ${error}`, "error");
+      }
+    };
+
+    const selectSummaryItem = async (item, element, activeClass) => {
+      try {
+        const full = await request(`/entries/${encodeURIComponent(item.id)}`);
+        full.match_reasons = item.match_reasons || [];
+        const assembled = await request("/assemble", {
+          method: "POST",
+          body: JSON.stringify({ entry_id: item.id, variables_override: {} }),
+        });
+        assembled.match_reasons = item.match_reasons || [];
+        if (currentViewMode === "list") {
+          selectedCardId = item.id;
+          list.querySelectorAll(".pv-card-active, .pv-row-active").forEach((el) => el.classList.remove("pv-card-active", "pv-row-active"));
+          element.classList.add(activeClass);
+          renderDetail(full, assembled);
+        } else {
+          openDetailModal(full, assembled);
+        }
+      } catch (error) {
+        toast(`加载详情失败: ${error}`, "error");
+      }
+    };
+
     for (const item of result.items) {
       const rowIndex = currentOffset + list.childElementCount + 1;
-      const row = create("div", { class: "pv-row" });
+      const buttonCopy = create("button", { class: "pv-btn pv-small pv-icon-btn", text: "⧉", title: "复制正向提示词" });
+      const buttonNode = create("button", { class: "pv-btn pv-small", text: "新建检索" });
+      const buttonEdit = create("button", { class: "pv-btn pv-small", text: "编辑" });
+      const buttonDelete = create("button", {
+        class: `pv-btn pv-small ${currentStatus === "deleted" ? "" : "pv-danger"}`,
+        text: currentStatus === "deleted" ? "还原" : "删除",
+      });
+      buttonCopy.addEventListener("click", async () => {
+        try {
+          const full = await request(`/entries/${encodeURIComponent(item.id)}`);
+          await copyTextToClipboard(full?.raw?.positive || "");
+          toast("已复制正向提示词", "success", 1500);
+        } catch (error) {
+          toast(`复制失败: ${error}`, "error");
+        }
+      });
+      buttonNode.addEventListener("click", () => openQueryNode(item));
+      buttonEdit.addEventListener("click", () => openEditorForItem(item));
+      buttonDelete.addEventListener("click", () => updateItemStatus(item));
+
+      if (currentViewMode === "list") {
+        const row = create("div", { class: "pv-row", "data-entry-id": item.id });
+      if (currentViewMode === "list" && item.id === selectedCardId) row.classList.add("pv-row-active");
+        const thumb = create("img", {
+          class: "pv-row-thumb",
+          alt: "thumbnail",
+          src: thumbUrl(item.id, item.updated_at),
+        });
+        thumb.onerror = () => { thumb.style.display = "none"; };
+        const subText = [
+          (item.tags || []).join(", "),
+          (item.match_reasons || []).join(" / "),
+          formatTimestamp(item.updated_at),
+          `评分 ${Number(item.score || 0).toFixed(1)}`,
+        ].filter(Boolean).join(" · ");
+        const left = create("div", { class: "pv-row-left" }, [
+          create("div", { class: "pv-row-index", text: String(rowIndex) }),
+          thumb,
+          create("div", { class: "pv-row-title", text: item.title || "(未命名)" }),
+          create("div", { class: "pv-row-sub", text: subText }),
+        ]);
+        const right = create("div", { class: "pv-row-right" }, [buttonCopy, buttonNode, buttonEdit, buttonDelete]);
+        row.appendChild(left);
+        row.appendChild(right);
+        row.addEventListener("click", async (event) => {
+          if (event.target === buttonCopy || event.target === buttonNode || event.target === buttonEdit || event.target === buttonDelete) return;
+          await selectSummaryItem(item, row, "pv-row-active");
+        });
+        list.appendChild(row);
+        continue;
+      }
+
+      const card = create("div", { class: "pv-card", "data-entry-id": item.id });
       const thumb = create("img", {
-        class: "pv-row-thumb",
+        class: "pv-card-thumb",
         alt: "thumbnail",
         src: thumbUrl(item.id, item.updated_at),
       });
-      thumb.onerror = () => { thumb.style.display = "none"; };
-      const tagsText = (item.tags || []).join(", ");
-      const timeText = formatTimestamp(item.updated_at);
-      const subText = tagsText ? `\u6807\u7b7e: ${tagsText}  \u00b7  ${timeText}` : timeText;
-      const left = create("div", { class: "pv-row-left" }, [
-        create("div", { class: "pv-row-index", text: String(rowIndex) }),
-        thumb,
-        create("div", { class: "pv-row-title", text: item.title || "(\u672a\u547d\u540d)" }),
-        create("div", { class: "pv-row-sub", text: subText }),
+      thumb.onerror = () => {
+        thumb.replaceWith(create("div", { class: "pv-card-thumb pv-card-thumb-empty", text: "暂无缩略图" }));
+      };
+      const tags = item.tags || [];
+      const tagWrap = create("div", { class: "pv-card-tags" }, tags.map((tag) => create("span", { class: "pv-card-tag", text: tag })));
+      const modelText = (item.model_scope || []).join(" / ") || "不限模型";
+      const metaLine = create("div", { class: "pv-card-meta" }, [
+        create("span", { class: "pv-card-index", text: `#${rowIndex}` }),
+        create("span", { class: "pv-card-model", text: modelText.length > 15 ? `${modelText.slice(0, 15)}…` : modelText }),
       ]);
-      const buttonNode = create("button", { class: "pv-btn pv-small", text: "\u65b0\u5efa\u68c0\u7d22" });
-      const buttonEdit = create("button", { class: "pv-btn pv-small", text: "\u7f16\u8f91" });
-      const buttonDelete = create("button", {
-        class: `pv-btn pv-small ${currentStatus === "deleted" ? "" : "pv-danger"}`,
-        text: currentStatus === "deleted" ? "\u8fd8\u539f" : "\u5220\u9664",
+      const reasonLine = create("div", {
+        class: "pv-card-reasons",
+        text: "提示词",
       });
-      const right = create("div", { class: "pv-row-right" }, [buttonNode, buttonEdit, buttonDelete]);
-
-      buttonNode.addEventListener("click", () => {
-        try {
-          const graph = app.graph || app.canvas?.graph;
-          if (!graph?.add) {
-            toast("\u5f53\u524d\u753b\u5e03\u4e0d\u53ef\u7528\uff0c\u8bf7\u5148\u6253\u5f00\u4e00\u4e2a\u5de5\u4f5c\u6d41", "error");
-            return;
-          }
-
-          const createNode = (type) => {
-            try { return globalThis.LiteGraph?.createNode?.(type) || null; }
-            catch (_e) { return null; }
-          };
-          const node = createNode("PromptVaultQuery") || createNode("\u63d0\u793a\u8bcd\u5e93\u68c0\u7d22");
-          if (!node) {
-            toast("\u672a\u627e\u5230\u8282\u70b9\u7c7b\u578b\uff1aPromptVaultQuery", "error");
-            return;
-          }
-
-          const canvas = app.canvas;
-          const ds = canvas?.ds;
-          const scale = ds?.scale || 1;
-          const offset = ds?.offset || [0, 0];
-          const canvasEl = canvas?.canvas;
-          const viewW = canvasEl?.width || 1200;
-          const viewH = canvasEl?.height || 800;
-          const centerX = viewW * 0.5 / scale - offset[0];
-          const centerY = viewH * 0.5 / scale - offset[1];
-          node.pos = [Math.round(centerX), Math.round(centerY)];
-          node.widgets?.forEach((widget) => {
-            if (widget.name === "query") widget.value = "";
-            if (widget.name === "title") widget.value = item.title || "";
-            if (widget.name === "tags") widget.value = (item.tags || []).join(",");
-            if (widget.name === "model") widget.value = (item.model_scope || []).join(",");
-            if (widget.name === "top_k") widget.value = 1;
-            if (widget.name === "variables_json") widget.value = "{}";
-          });
-          graph.add(node);
-          app.graph?.setDirtyCanvas?.(true, true);
-          app.canvas?.setDirty?.(true, true);
-
-          closeManager();
-          toast("\u68c0\u7d22\u8282\u70b9\u5df2\u6dfb\u52a0\u5230\u753b\u5e03", "success");
-        } catch (error) {
-          toast(`\u521b\u5efa\u8282\u70b9\u5931\u8d25: ${error}`, "error");
-        }
+      const summaryLine = create("div", { class: "pv-card-summary", text: item.positive_preview || "暂无正向提示词摘要" });
+      const bottomLine = create("div", { class: "pv-card-bottom" }, [
+        create("span", { class: "pv-card-updated", text: formatTimestamp(item.updated_at) }),
+        create("span", {
+          class: `pv-card-score ${item.favorite ? "pv-card-favorite-on" : ""}`,
+          text: `${item.favorite ? "★ " : ""}评分 ${Number(item.score || 0).toFixed(1)}`,
+        }),
+      ]);
+      const titleRow = create("div", { class: "pv-card-title-row" }, [
+        create("div", { class: "pv-card-title", text: item.title || "(未命名)" }),
+        buttonCopy,
+      ]);
+      const cardActions = create("div", { class: "pv-card-actions" }, [buttonNode, buttonEdit, buttonDelete]);
+      const cardBody = create("div", { class: "pv-card-body" }, [
+        metaLine,
+        titleRow,
+        tagWrap,
+        reasonLine,
+        summaryLine,
+        bottomLine,
+      ]);
+      card.appendChild(thumb);
+      card.appendChild(cardBody);
+      card.appendChild(cardActions);
+      card.addEventListener("click", async (event) => {
+        if (event.target === buttonCopy || event.target === buttonNode || event.target === buttonEdit || event.target === buttonDelete) return;
+        await selectSummaryItem(item, card, "pv-card-active");
       });
-
-      buttonEdit.addEventListener("click", async () => {
-        try {
-          const full = await request(`/entries/${encodeURIComponent(item.id)}`);
-          openEditor(full);
-        } catch (error) {
-          toast(`\u52a0\u8f7d\u7f16\u8f91\u6570\u636e\u5931\u8d25: ${error}`, "error");
-        }
-      });
-      buttonDelete.addEventListener("click", async () => {
-        try {
-          if (currentStatus === "deleted") {
-            if (!confirm("\u786e\u5b9a\u8fd8\u539f\u8bb0\u5f55\uff1f")) return;
-            await request(`/entries/${encodeURIComponent(item.id)}`, {
-              method: "PUT",
-              body: JSON.stringify({ status: "active" }),
-            });
-            toast("\u8bb0\u5f55\u5df2\u8fd8\u539f", "success");
-          } else {
-            if (!confirm("\u786e\u5b9a\u5220\u9664\uff1f\u5c06\u79fb\u5165\u56de\u6536\u7ad9\u3002")) return;
-            await request(`/entries/${encodeURIComponent(item.id)}`, { method: "DELETE" });
-            toast("\u5df2\u79fb\u5165\u56de\u6536\u7ad9", "success");
-          }
-          await reloadList();
-        } catch (error) {
-          toast(`\u66f4\u65b0\u72b6\u6001\u5931\u8d25: ${error}`, "error");
-        }
-      });
-
-      row.addEventListener("click", async (event) => {
-        if (event.target === buttonNode || event.target === buttonEdit || event.target === buttonDelete) return;
-        try {
-          list.querySelectorAll(".pv-row-active").forEach((el) => el.classList.remove("pv-row-active"));
-          row.classList.add("pv-row-active");
-          const full = await request(`/entries/${encodeURIComponent(item.id)}`);
-          const assembled = await request("/assemble", {
-            method: "POST",
-            body: JSON.stringify({ entry_id: item.id, variables_override: {} }),
-          });
-          renderDetail(full, assembled);
-        } catch (error) {
-          toast(`\u52a0\u8f7d\u8be6\u60c5\u5931\u8d25: ${error}`, "error");
-        }
-      });
-
-      row.appendChild(left);
-      row.appendChild(right);
-      list.appendChild(row);
+      list.appendChild(card);
     }
 
-    const firstItem = result.items[0];
-    if (firstItem?.id) {
+    const preferredItem = currentViewMode === "list"
+      ? (result.items.find((item) => item.id === selectedCardId) || result.items[0])
+      : null;
+    if (preferredItem?.id) {
       try {
-        const full = await request(`/entries/${encodeURIComponent(firstItem.id)}`);
+        selectedCardId = preferredItem.id;
+        const full = await request(`/entries/${encodeURIComponent(preferredItem.id)}`);
+        full.match_reasons = preferredItem.match_reasons || [];
         const assembled = await request("/assemble", {
           method: "POST",
-          body: JSON.stringify({ entry_id: firstItem.id, variables_override: {} }),
+          body: JSON.stringify({ entry_id: preferredItem.id, variables_override: {} }),
         });
+        assembled.match_reasons = preferredItem.match_reasons || [];
         renderDetail(full, assembled);
-        const firstRow = list.querySelector(".pv-row");
-        if (firstRow) firstRow.classList.add("pv-row-active");
-      } catch (_e) { /* ignore */ }
+        const activeItem = list.querySelector(`[data-entry-id="${CSS.escape(preferredItem.id)}"]`);
+        if (activeItem) activeItem.classList.add("pv-row-active");
+      } catch (_e) {
+        /* ignore */
+      }
+    } else if (currentViewMode !== "list") {
+      statusBarRight.textContent = "";
     }
+    refreshQuickFilterUI();
   }
 
   /* ── Keyboard: Enter to search, Escape to close ── */
@@ -1143,10 +1578,12 @@ function openManager() {
   modal.appendChild(toolbar);
   modal.appendChild(body);
   modal.appendChild(statusBar);
+  modal.appendChild(importInput);
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
 
   inputQuery.focus();
+  refreshQuickFilterUI();
 
   loadTags().catch((e) => {
     sidebar.textContent = "";
