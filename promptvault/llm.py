@@ -102,7 +102,7 @@ class LLMClient:
 
         timeout = aiohttp.ClientTimeout(total=self.config.get("timeout", 30))
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
                 async with session.post(
                     self._endpoint, json=body, headers=self._headers
                 ) as resp:
@@ -139,24 +139,36 @@ class LLMClient:
         if model:
             body["model"] = model
 
-        timeout = aiohttp.ClientTimeout(total=min(self.config.get("timeout", 30), 15))
+        endpoint = self._endpoint
+        headers = self._headers
+        timeout_sec = min(self.config.get("timeout", 30), 15)
+        logger.info("[LLM test] endpoint=%s model=%r timeout=%ds", endpoint, model, timeout_sec)
+        logger.debug("[LLM test] headers=%s body=%s", headers, json.dumps(body, ensure_ascii=False))
+
+        timeout = aiohttp.ClientTimeout(total=timeout_sec)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
                 async with session.post(
-                    self._endpoint, json=body, headers=self._headers
+                    endpoint, json=body, headers=headers
                 ) as resp:
+                    logger.info("[LLM test] response status=%d", resp.status)
                     if resp.status != 200:
                         text = await resp.text()
+                        logger.warning("[LLM test] error body: %s", text[:500])
                         raise RuntimeError(
                             f"服务返回 {resp.status}: {text[:200] if text.strip() else '(空响应，可能模型未加载)'}"
                         )
                     data = await resp.json()
-        except aiohttp.ClientConnectorError:
+                    logger.debug("[LLM test] response data keys=%s", list(data.keys()))
+        except aiohttp.ClientConnectorError as e:
+            logger.error("[LLM test] connect failed: %s", e)
             raise RuntimeError(
-                f"无法连接 {self._endpoint}，请检查地址和 LM Studio 是否启动"
+                f"无法连接 {endpoint}，请检查地址和 LM Studio 是否启动"
             )
         except asyncio.TimeoutError:
+            logger.error("[LLM test] timeout after %ds", timeout_sec)
             raise RuntimeError("连接超时，请检查地址或增大超时时间")
 
         resp_model = data.get("model", model or "(unknown)")
+        logger.info("[LLM test] success, model=%s", resp_model)
         return {"ok": True, "model": resp_model}
