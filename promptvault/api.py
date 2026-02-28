@@ -1,5 +1,5 @@
-import json
 import base64
+import json
 
 from aiohttp import web
 
@@ -20,7 +20,6 @@ def _bad_request(msg):
 
 
 def _decode_thumbnail_b64(payload):
-    """If payload contains thumbnail_b64, decode it into thumbnail_png bytes."""
     b64 = (payload or {}).get("thumbnail_b64")
     if not b64 or not isinstance(b64, str):
         return
@@ -45,6 +44,37 @@ def setup_routes():
 
     routes = PromptServer.instance.routes
 
+    def _sanitize_llm_config(config):
+        safe = dict(config or {})
+        key = safe.get("api_key", "")
+        if key and len(key) > 4:
+            safe["api_key"] = key[:2] + "*" * (len(key) - 4) + key[-2:]
+        return safe
+
+    def _validate_llm_payload(payload):
+        positive = str((payload or {}).get("positive", "") or "")
+        negative = str((payload or {}).get("negative", "") or "")
+        existing_tags = (payload or {}).get("existing_tags", [])
+        existing_title = str((payload or {}).get("existing_title", "") or "").strip()
+        if not positive and not negative:
+            return None, None, None, None, _bad_request("正向和负向提示词不能同时为空")
+        if not isinstance(existing_tags, list):
+            existing_tags = []
+        existing_tags = [str(tag).strip() for tag in existing_tags if str(tag).strip()]
+        return positive, negative, existing_tags, existing_title, None
+
+    def _load_llm_config(require_enabled=True):
+        from .llm import normalize_config
+
+        store = PromptVaultStore.get()
+        config = normalize_config(store.get_llm_config())
+        if require_enabled and not config.get("enabled"):
+            return None, _json_response(
+                {"error": "LLM 功能未启用，请先在设置中开启并配置 LM Studio 地址。"},
+                status=400,
+            )
+        return config, None
+
     @routes.get("/promptvault/health")
     async def health(_request):
         store = PromptVaultStore.get()
@@ -68,18 +98,17 @@ def setup_routes():
 
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
         items = store.search_entries(q=q, tags=tag_list, model=model, status=status, limit=limit, offset=offset)
-        return _json_response({"items": items, "limit": limit, "offset": offset})
+        total = store.count_entries(q=q, tags=tag_list, model=model, status=status)
+        return _json_response({"items": items, "limit": limit, "offset": offset, "total": total})
 
     @routes.post("/promptvault/entries/purge_deleted")
     async def purge_deleted(_request):
-        """清空回收站：硬删除所有 status=deleted 的记录。"""
         store = PromptVaultStore.get()
         count = store.purge_deleted_entries()
         return _json_response({"deleted": count})
 
     @routes.post("/promptvault/tags/tidy")
     async def tidy_tags(_request):
-        """整理标签：删除无记录引用的标签，补充缺失标签。"""
         store = PromptVaultStore.get()
         result = store.tidy_tags()
         return _json_response(result)
@@ -181,13 +210,17 @@ def setup_routes():
             return _bad_request("variables_override 必须是对象")
 
         model_hint = (payload or {}).get("model_hint") or ""
-
         try:
             entry = store.get_entry(entry_id)
         except KeyError:
             return _json_response({"error": "未找到记录"}, status=404)
 
-        assembled = assemble_entry(store=store, entry=entry, variables_override=variables_override, model_hint=model_hint)
+        assembled = assemble_entry(
+            store=store,
+            entry=entry,
+            variables_override=variables_override,
+            model_hint=model_hint,
+        )
         return _json_response(assembled)
 
     @routes.post("/promptvault/fragments")
@@ -230,35 +263,28 @@ def setup_routes():
             return _json_response({"error": "未找到模板"}, status=404)
         return _json_response(tpl)
 
-    # ── LLM / AI Auto-Tag routes ──
-
     @routes.get("/promptvault/llm/config")
     async def get_llm_config(_request):
-        store = PromptVaultStore.get()
-        config = store.get_llm_config()
-        safe = dict(config)
-        key = safe.get("api_key", "")
-        if key and len(key) > 4:
-            safe["api_key"] = key[:2] + "*" * (len(key) - 4) + key[-2:]
-        return _json_response(safe)
+        config, _error = _load_llm_config(require_enabled=False)
+        return _json_response(_sanitize_llm_config(config))
 
     @routes.put("/promptvault/llm/config")
     async def put_llm_config(request):
+        from .llm import normalize_config
+
         try:
             payload = await request.json()
         except Exception:
             return _bad_request("JSON 解析失败")
         if not isinstance(payload, dict):
             return _bad_request("请求体必须是 JSON 对象")
+
         store = PromptVaultStore.get()
         current = store.get_llm_config()
         current.update(payload)
+        current = normalize_config(current)
         store.set_llm_config(current)
-        safe = dict(current)
-        key = safe.get("api_key", "")
-        if key and len(key) > 4:
-            safe["api_key"] = key[:2] + "*" * (len(key) - 4) + key[-2:]
-        return _json_response(safe)
+        return _json_response(_sanitize_llm_config(current))
 
     @routes.post("/promptvault/llm/auto_tag")
     async def llm_auto_tag(request):
@@ -266,19 +292,13 @@ def setup_routes():
             payload = await request.json()
         except Exception:
             return _bad_request("JSON 解析失败")
-        positive = (payload or {}).get("positive", "")
-        negative = (payload or {}).get("negative", "")
-        existing_tags = (payload or {}).get("existing_tags", [])
-        if not positive and not negative:
-            return _bad_request("正向和负向提示词不能同时为空")
+        positive, negative, existing_tags, _existing_title, error = _validate_llm_payload(payload)
+        if error:
+            return error
 
-        store = PromptVaultStore.get()
-        config = store.get_llm_config()
-        if not config.get("enabled"):
-            return _json_response(
-                {"error": "LLM 功能未启用，请先在设置中开启并配置 LM Studio 地址。"},
-                status=400,
-            )
+        config, error = _load_llm_config()
+        if error:
+            return error
 
         from .llm import LLMClient
 
@@ -289,25 +309,86 @@ def setup_routes():
             return _json_response({"error": str(exc), "tags": []})
         return _json_response({"tags": tags})
 
-    @routes.post("/promptvault/llm/test")
-    async def llm_test(request):
-        store = PromptVaultStore.get()
-        config = store.get_llm_config()
-
+    @routes.post("/promptvault/llm/auto_title")
+    async def llm_auto_title(request):
         try:
             payload = await request.json()
         except Exception:
-            payload = {}
-        if isinstance(payload, dict) and payload:
-            config.update(payload)
+            return _bad_request("JSON 解析失败")
+        positive, negative, existing_tags, existing_title, error = _validate_llm_payload(payload)
+        if error:
+            return error
+
+        config, error = _load_llm_config()
+        if error:
+            return error
 
         from .llm import LLMClient
 
         client = LLMClient(config)
         try:
+            title = await client.auto_title(positive, negative, existing_title, existing_tags)
+        except Exception as exc:
+            return _json_response({"error": str(exc), "title": ""})
+        return _json_response({"title": title})
+
+    @routes.post("/promptvault/llm/auto_title_tags")
+    async def llm_auto_title_tags(request):
+        try:
+            payload = await request.json()
+        except Exception:
+            return _bad_request("JSON 解析失败")
+        positive, negative, existing_tags, existing_title, error = _validate_llm_payload(payload)
+        if error:
+            return error
+
+        config, error = _load_llm_config()
+        if error:
+            return error
+
+        from .llm import LLMClient
+
+        client = LLMClient(config)
+        try:
+            result = await client.auto_title_and_tags(positive, negative, existing_title, existing_tags)
+        except Exception as exc:
+            return _json_response({"error": str(exc), "title": "", "tags": []})
+        return _json_response({"title": result.get("title", ""), "tags": result.get("tags", [])})
+
+    @routes.post("/promptvault/llm/test")
+    async def llm_test(request):
+        import logging as _logging
+
+        _log = _logging.getLogger("PromptVault")
+        config, _error = _load_llm_config(require_enabled=False)
+        _log.info("[llm/test] db config base_url=%s enabled=%s", config.get("base_url"), config.get("enabled"))
+
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+
+        if isinstance(payload, dict) and payload:
+            _log.info("[llm/test] payload keys=%s base_url=%s", list(payload.keys()), payload.get("base_url"))
+            config.update(payload)
+
+        _log.info(
+            "[llm/test] final base_url=%s model=%s timeout=%s",
+            config.get("base_url"),
+            config.get("model"),
+            config.get("timeout"),
+        )
+
+        from .llm import LLMClient
+
+        client = LLMClient(config)
+        _log.info("[llm/test] endpoint=%s", client._endpoint)
+        try:
             result = await client.test_connection()
         except Exception as exc:
+            _log.error("[llm/test] failed: %s", exc)
             return _json_response({"ok": False, "error": str(exc)})
+        _log.info("[llm/test] success: %s", result)
         return _json_response(result)
 
     @routes.get("/promptvault/tags")
@@ -322,9 +403,8 @@ def setup_routes():
 
     @routes.post("/promptvault/extract_image_metadata")
     async def extract_image_metadata(request):
-        """Accept a base64-encoded image, write to temp file, extract metadata."""
         import io
-        import tempfile
+
         try:
             payload = await request.json()
         except Exception:
@@ -338,7 +418,7 @@ def setup_routes():
         except Exception:
             return _bad_request("base64 解码失败")
 
-        from .image_metadata import extract_from_info, extract_exif_xmp
+        from .image_metadata import extract_exif_xmp, extract_from_info
         from PIL import Image as PILImage
 
         try:
@@ -356,8 +436,8 @@ def setup_routes():
             return _json_response({"found": {}, "data": {}})
 
         from ..nodes import (
-            _extract_generation_data,
             _extract_from_workflow_obj,
+            _extract_generation_data,
             _parse_parameters_text,
         )
 
@@ -379,22 +459,23 @@ def setup_routes():
                 workflow_obj = None
         if isinstance(workflow_obj, dict):
             wf_data = _extract_from_workflow_obj(workflow_obj)
-            for k, v in wf_data.items():
-                if v not in (None, "", 0):
-                    data[k] = v
+            for key, value in wf_data.items():
+                if value not in (None, "", 0):
+                    data[key] = value
 
         params_text = found.get("parameters")
         if isinstance(params_text, str) and params_text.strip():
             params_data = _parse_parameters_text(params_text)
-            for k, v in params_data.items():
-                if v not in (None, "", 0):
-                    data[k] = v
+            for key, value in params_data.items():
+                if value not in (None, "", 0):
+                    data[key] = value
 
         return _json_response({"found": list(found.keys()), "data": data})
 
     @routes.get("/promptvault/model_resolutions")
     async def model_resolutions(_request):
         from ..nodes import MODEL_RESOLUTIONS
+
         data = {}
         for model, sizes in MODEL_RESOLUTIONS.items():
             data[model] = [f"{w}x{h}" for w, h in sizes]

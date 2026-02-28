@@ -601,6 +601,57 @@ class PromptVaultStore:
         finally:
             conn.close()
 
+    def count_entries(self, q="", tags=None, model="", status="active"):
+        tags = normalize_tags(tags or [])
+        q = normalize_text(q)
+        model = normalize_text(model)
+
+        conn = self._connect()
+        try:
+            where = ["e.status = ?"]
+            params = [status]
+
+            if model:
+                where.append("e.model_scope_json LIKE ?")
+                params.append(f"%{model}%")
+
+            for tag in tags:
+                where.append("e.tags_json LIKE ?")
+                params.append(f"%{tag}%")
+
+            if q:
+                fts_q = self._escape_fts_query(q)
+                sql = f"""
+                SELECT COUNT(*) AS total
+                FROM entries_fts f
+                JOIN entries e ON e.id = f.entry_id
+                WHERE ({' AND '.join(where)}) AND entries_fts MATCH ?
+                """
+                try:
+                    row = conn.execute(sql, params + [fts_q]).fetchone()
+                    return int((row or {})["total"] if row else 0)
+                except sqlite3.OperationalError:
+                    like_where = list(where)
+                    like_where.append("(e.title LIKE ? OR e.raw_json LIKE ? OR e.negative_json LIKE ?)")
+                    like_q = f"%{q}%"
+                    sql_like = f"""
+                    SELECT COUNT(*) AS total
+                    FROM entries e
+                    WHERE {' AND '.join(like_where)}
+                    """
+                    row = conn.execute(sql_like, params + [like_q, like_q, like_q]).fetchone()
+                    return int((row or {})["total"] if row else 0)
+
+            sql = f"""
+            SELECT COUNT(*) AS total
+            FROM entries e
+            WHERE {' AND '.join(where)}
+            """
+            row = conn.execute(sql, params).fetchone()
+            return int((row or {})["total"] if row else 0)
+        finally:
+            conn.close()
+
     def list_entry_versions(self, entry_id, limit=50):
         conn = self._connect()
         try:

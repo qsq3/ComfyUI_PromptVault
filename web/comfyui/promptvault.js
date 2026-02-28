@@ -4,6 +4,7 @@ const EXT_NAME = "ComfyUI_PromptVault";
 const EXT_ID = "ComfyUI_PromptVault.TopMenu";
 const BASE_URL = `/extensions/${EXT_NAME}/`;
 const GUARD_KEY = "__PROMPTVAULT_REGISTERED__";
+const ASSET_VERSION = "20260228-llm-multi-rules";
 
 function create(tag, attrs = {}, children = []) {
   const element = document.createElement(tag);
@@ -80,13 +81,20 @@ function toast(message, type = "info", duration = 2800) {
   el.addEventListener("click", () => { clearTimeout(timer); remove(); });
 }
 
+function ensureStylesheet(id, file) {
+  let link = document.getElementById(id);
+  if (!link) {
+    link = document.createElement("link");
+    link.id = id;
+    link.rel = "stylesheet";
+    document.head.appendChild(link);
+  }
+  link.href = `${BASE_URL}${file}?v=${ASSET_VERSION}`;
+  return link;
+}
+
 function ensureStyle() {
-  if (document.getElementById("promptvault-style")) return;
-  const link = document.createElement("link");
-  link.id = "promptvault-style";
-  link.rel = "stylesheet";
-  link.href = `${BASE_URL}promptvault.css`;
-  document.head.appendChild(link);
+  ensureStylesheet("promptvault-style", "promptvault.css");
 }
 
 async function request(path, options = {}) {
@@ -99,6 +107,31 @@ async function request(path, options = {}) {
     throw new Error(`${response.status}: ${text}`);
   }
   return await response.json();
+}
+
+let _llmModuleReady = null;
+async function ensureLLMModule() {
+  ensureStylesheet("promptvault-llm-style", "promptvault-llm.css");
+  if (window.PromptVaultLLM) {
+    if (!window.PromptVaultLLM._inited) {
+      window.PromptVaultLLM.init({ create, request, toast });
+      window.PromptVaultLLM._inited = true;
+    }
+    return Promise.resolve();
+  }
+  if (_llmModuleReady) return _llmModuleReady;
+  _llmModuleReady = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = `${BASE_URL}promptvault-llm.js?v=${ASSET_VERSION}`;
+    script.onload = () => {
+      window.PromptVaultLLM.init({ create, request, toast });
+      window.PromptVaultLLM._inited = true;
+      resolve();
+    };
+    script.onerror = () => reject(new Error("Failed to load promptvault-llm.js"));
+    document.head.appendChild(script);
+  });
+  return _llmModuleReady;
 }
 
 function ensureFloatingButton(openFn) {
@@ -156,205 +189,6 @@ function thumbUrl(itemId, updatedAt) {
   return `/promptvault/entries/${encodeURIComponent(itemId)}/thumbnail?v=${v}`;
 }
 
-function openTagPicker(suggested, existing, onConfirm) {
-  const overlayPicker = create("div", { class: "pv-overlay" });
-  const panel = create("div", { class: "pv-modal pv-tag-picker" });
-  panel.appendChild(create("div", { class: "pv-title", text: "AI \u63a8\u8350\u6807\u7b7e" }));
-
-  const body = create("div", { class: "pv-tag-picker-body" });
-  const checkboxes = [];
-  const existingSet = new Set(existing.map((t) => t.toLowerCase()));
-
-  suggested.forEach((tag) => {
-    const already = existingSet.has(tag.toLowerCase());
-    const id = `pv-tag-${Math.random().toString(36).slice(2, 8)}`;
-    const cb = create("input", { type: "checkbox", id });
-    if (!already) cb.checked = true;
-    if (already) cb.disabled = true;
-    const label = create("label", { for: id, text: already ? `${tag} (\u5df2\u5b58\u5728)` : tag });
-    if (already) label.classList.add("pv-tag-existing");
-    const row = create("div", { class: "pv-tag-picker-item" }, [cb, label]);
-    body.appendChild(row);
-    checkboxes.push({ cb, tag, already });
-  });
-
-  const btnSelectAll = create("button", { class: "pv-btn pv-small", text: "\u5168\u9009" });
-  const btnDeselectAll = create("button", { class: "pv-btn pv-small", text: "\u53d6\u6d88\u5168\u9009" });
-  const btnConfirm = create("button", { class: "pv-btn pv-primary", text: "\u786e\u8ba4\u6dfb\u52a0" });
-  const btnCancel = create("button", { class: "pv-btn", text: "\u53d6\u6d88" });
-
-  btnSelectAll.addEventListener("click", () => {
-    checkboxes.forEach(({ cb, already }) => { if (!already) cb.checked = true; });
-  });
-  btnDeselectAll.addEventListener("click", () => {
-    checkboxes.forEach(({ cb, already }) => { if (!already) cb.checked = false; });
-  });
-
-  const close = () => {
-    if (document.body.contains(overlayPicker)) document.body.removeChild(overlayPicker);
-  };
-  btnCancel.addEventListener("click", close);
-  btnConfirm.addEventListener("click", () => {
-    const selected = checkboxes
-      .filter(({ cb, already }) => cb.checked && !already)
-      .map(({ tag }) => tag);
-    onConfirm(selected);
-    close();
-  });
-
-  const actions = create("div", { class: "pv-editor-actions" }, [
-    btnSelectAll, btnDeselectAll, btnConfirm, btnCancel,
-  ]);
-  panel.appendChild(body);
-  panel.appendChild(actions);
-  overlayPicker.appendChild(panel);
-  overlayPicker.addEventListener("click", (e) => { if (e.target === overlayPicker) close(); });
-  overlayPicker.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
-  document.body.appendChild(overlayPicker);
-}
-
-function openLLMSettings() {
-  const overlaySettings = create("div", { class: "pv-overlay" });
-  const panel = create("div", { class: "pv-modal pv-llm-settings" });
-  panel.appendChild(create("div", { class: "pv-title", text: "LLM \u8bbe\u7f6e\uff08AI \u6807\u7b7e\uff09" }));
-
-  const body = create("div", { class: "pv-editor-body" });
-  body.textContent = "\u52a0\u8f7d\u4e2d\u2026";
-
-  const close = () => {
-    if (document.body.contains(overlaySettings)) document.body.removeChild(overlaySettings);
-  };
-
-  async function loadAndRender() {
-    let config;
-    try {
-      config = await request("/llm/config");
-    } catch (e) {
-      body.textContent = `\u52a0\u8f7d\u5931\u8d25: ${e}`;
-      return;
-    }
-    body.textContent = "";
-
-    const fieldEnabled = create("input", { type: "checkbox" });
-    fieldEnabled.checked = !!config.enabled;
-    const enableRow = create("label", { class: "pv-llm-switch" }, [
-      fieldEnabled,
-      create("span", { text: " \u542f\u7528 AI \u6807\u7b7e\u529f\u80fd" }),
-    ]);
-
-    const fieldBaseUrl = create("input", {
-      class: "pv-input",
-      placeholder: "LM Studio \u5730\u5740\uff0c\u5982 http://localhost:1234",
-      value: config.base_url || "http://localhost:1234",
-    });
-    const fieldModel = create("input", {
-      class: "pv-input",
-      placeholder: "\u6a21\u578b\u540d\u79f0\uff08\u53ef\u7559\u7a7a\uff0c\u4f7f\u7528\u9ed8\u8ba4\uff09",
-      value: config.model || "",
-    });
-    const fieldApiKey = create("input", {
-      class: "pv-input",
-      placeholder: "API Key\uff08\u53ef\u9009\uff09",
-      type: "password",
-      value: "",
-    });
-    if (config.api_key) {
-      fieldApiKey.setAttribute("placeholder", `API Key (\u5df2\u914d\u7f6e: ${config.api_key})`);
-    }
-    const fieldTimeout = create("input", {
-      class: "pv-input pv-input-short",
-      placeholder: "\u8d85\u65f6\uff08\u79d2\uff09",
-      type: "number",
-      value: String(config.timeout || 30),
-    });
-    const fieldSystemPrompt = create("textarea", {
-      class: "pv-textarea",
-      placeholder: "System Prompt",
-    });
-    fieldSystemPrompt.value = config.system_prompt || "";
-    fieldSystemPrompt.style.height = "140px";
-
-    const btnTest = create("button", { class: "pv-btn", text: "\u6d4b\u8bd5\u8fde\u63a5" });
-    const btnSave = create("button", { class: "pv-btn pv-primary", text: "\u4fdd\u5b58" });
-    const btnCancel = create("button", { class: "pv-btn", text: "\u53d6\u6d88" });
-    const testResult = create("span", { class: "pv-llm-test-result", text: "" });
-
-    btnTest.addEventListener("click", async () => {
-      btnTest.disabled = true;
-      btnTest.textContent = "\u6d4b\u8bd5\u4e2d\u2026";
-      testResult.textContent = "";
-      try {
-        const testConfig = {
-          base_url: fieldBaseUrl.value.trim() || "http://localhost:1234",
-          model: fieldModel.value.trim(),
-          timeout: parseInt(fieldTimeout.value, 10) || 30,
-        };
-        const newKey = fieldApiKey.value.trim();
-        if (newKey) testConfig.api_key = newKey;
-        const res = await request("/llm/test", {
-          method: "POST",
-          body: JSON.stringify(testConfig),
-        });
-        if (res.ok) {
-          testResult.textContent = `\u2713 \u8fde\u63a5\u6210\u529f\uff0c\u6a21\u578b: ${res.model || "unknown"}`;
-          testResult.style.color = "#2ecc71";
-        } else {
-          testResult.textContent = `\u2717 ${res.error || "\u8fde\u63a5\u5931\u8d25"}`;
-          testResult.style.color = "#e74c3c";
-        }
-      } catch (e) {
-        testResult.textContent = `\u2717 ${e}`;
-        testResult.style.color = "#e74c3c";
-      } finally {
-        btnTest.disabled = false;
-        btnTest.textContent = "\u6d4b\u8bd5\u8fde\u63a5";
-      }
-    });
-
-    btnSave.addEventListener("click", async () => {
-      const update = {
-        enabled: fieldEnabled.checked,
-        base_url: fieldBaseUrl.value.trim() || "http://localhost:1234",
-        model: fieldModel.value.trim(),
-        timeout: parseInt(fieldTimeout.value, 10) || 30,
-        system_prompt: fieldSystemPrompt.value,
-      };
-      const newKey = fieldApiKey.value.trim();
-      if (newKey) update.api_key = newKey;
-      try {
-        await request("/llm/config", { method: "PUT", body: JSON.stringify(update) });
-        toast("LLM \u8bbe\u7f6e\u5df2\u4fdd\u5b58", "success");
-        close();
-      } catch (e) {
-        toast(`\u4fdd\u5b58\u5931\u8d25: ${e}`, "error");
-      }
-    });
-
-    btnCancel.addEventListener("click", close);
-
-    body.appendChild(enableRow);
-    body.appendChild(create("div", { class: "pv-detail-title", text: "LM Studio \u5730\u5740" }));
-    body.appendChild(fieldBaseUrl);
-    body.appendChild(create("div", { class: "pv-detail-title", text: "\u6a21\u578b\u540d\u79f0" }));
-    body.appendChild(fieldModel);
-    body.appendChild(create("div", { class: "pv-detail-title", text: "API Key" }));
-    body.appendChild(fieldApiKey);
-    body.appendChild(create("div", { class: "pv-detail-title", text: "\u8d85\u65f6\u65f6\u95f4\uff08\u79d2\uff09" }));
-    body.appendChild(fieldTimeout);
-    body.appendChild(create("div", { class: "pv-detail-title", text: "System Prompt" }));
-    body.appendChild(fieldSystemPrompt);
-    body.appendChild(create("div", { class: "pv-llm-test-row" }, [btnTest, testResult]));
-    body.appendChild(create("div", { class: "pv-editor-actions" }, [btnSave, btnCancel]));
-  }
-
-  panel.appendChild(body);
-  overlaySettings.appendChild(panel);
-  overlaySettings.addEventListener("click", (e) => { if (e.target === overlaySettings) close(); });
-  overlaySettings.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
-  document.body.appendChild(overlaySettings);
-  loadAndRender();
-}
-
 function openManager() {
   ensureStyle();
 
@@ -382,6 +216,9 @@ function openManager() {
   const buttonNew = create("button", { class: "pv-btn", text: "\u65b0\u5efa" });
   const buttonLLMSettings = create("button", { class: "pv-btn", text: "LLM \u8bbe\u7f6e" });
   const buttonToggleSidebar = create("button", { class: "pv-btn", text: "\u6807\u7b7e\u680f" });
+  const paginationInfo = create("span", { class: "pv-toolbar-page-info", text: "1 / 1 \u9875" });
+  const buttonPrevPage = create("button", { class: "pv-btn pv-small", text: "\u4e0a\u4e00\u9875" });
+  const buttonNextPage = create("button", { class: "pv-btn pv-small", text: "\u4e0b\u4e00\u9875" });
   const buttonClose = create("button", { class: "pv-btn pv-danger", text: "\u5173\u95ed" });
   const title = create("div", { class: "pv-title" }, [titleLabel, buttonClose]);
   const toolbarSpacer = create("div", { class: "pv-toolbar-spacer" });
@@ -392,6 +229,9 @@ function openManager() {
     buttonSearch,
     buttonNew,
     toolbarSpacer,
+    paginationInfo,
+    buttonPrevPage,
+    buttonNextPage,
     selectStatus,
     buttonPurge,
     buttonLLMSettings,
@@ -431,6 +271,9 @@ function openManager() {
   let selectedTag = "";
   let currentStatus = "active";
   let sidebarVisible = false;
+  let currentOffset = 0;
+  let currentTotal = 0;
+  const pageLimit = 10;
 
   sidebar.style.display = "none";
   body.classList.add("pv-body-no-sidebar");
@@ -439,7 +282,26 @@ function openManager() {
     if (document.body.contains(overlay)) document.body.removeChild(overlay);
   }
 
-  buttonLLMSettings.addEventListener("click", () => openLLMSettings());
+  function resetPagination() {
+    currentOffset = 0;
+  }
+
+  function updatePaginationUI(itemsCount = 0) {
+    const total = Math.max(0, currentTotal);
+    const page = total ? Math.floor(currentOffset / pageLimit) + 1 : 1;
+    const totalPages = Math.max(1, Math.ceil(total / pageLimit));
+    const start = total ? currentOffset + 1 : 0;
+    const end = total ? Math.min(currentOffset + itemsCount, total) : 0;
+    paginationInfo.textContent = `${page} / ${totalPages} 页`;
+    buttonPrevPage.disabled = currentOffset <= 0;
+    buttonNextPage.disabled = currentOffset + itemsCount >= total;
+    statusBarLeft.textContent = `共 ${total} 条记录` + (total ? ` · 显示 ${start}-${end}` : "") + (currentStatus === "deleted" ? "（回收站）" : "");
+  }
+
+  buttonLLMSettings.addEventListener("click", async () => {
+    await ensureLLMModule();
+    window.PromptVaultLLM.openLLMSettings();
+  });
 
   buttonToggleSidebar.addEventListener("click", () => {
     sidebarVisible = !sidebarVisible;
@@ -454,6 +316,19 @@ function openManager() {
 
   selectStatus.addEventListener("change", () => {
     currentStatus = selectStatus.value === "deleted" ? "deleted" : "active";
+    resetPagination();
+    reloadList().catch((e) => toast(String(e), "error"));
+  });
+
+  buttonPrevPage.addEventListener("click", () => {
+    if (currentOffset <= 0) return;
+    currentOffset = Math.max(0, currentOffset - pageLimit);
+    reloadList().catch((e) => toast(String(e), "error"));
+  });
+
+  buttonNextPage.addEventListener("click", () => {
+    if (currentOffset + pageLimit >= currentTotal) return;
+    currentOffset += pageLimit;
     reloadList().catch((e) => toast(String(e), "error"));
   });
 
@@ -502,6 +377,7 @@ function openManager() {
         selectedTag = "";
         inputTags.value = "";
         updateSidebarActive(allRow);
+        resetPagination();
         reloadList().catch((e) => toast(String(e), "error"));
       });
       const tagSearchInput = create("input", {
@@ -527,6 +403,7 @@ function openManager() {
             selectedTag = name;
             inputTags.value = name;
             updateSidebarActive(row);
+            resetPagination();
             reloadList().catch((e) => toast(String(e), "error"));
           });
           tagListContainer.appendChild(row);
@@ -659,29 +536,116 @@ function openManager() {
       "aria-label": isNew ? "\u65b0\u5efa\u63d0\u793a\u8bcd" : "\u7f16\u8f91\u63d0\u793a\u8bcd",
     });
 
-    const fieldTitle = create("input", { class: "pv-input", placeholder: "\u6807\u9898", value: entry?.title || "" });
+    const fieldTitle = create("input", { class: "pv-input pv-input-flex", placeholder: "\u6807\u9898", value: entry?.title || "" });
     const fieldTags = create("input", {
       class: "pv-input pv-input-flex",
       placeholder: "\u6807\u7b7e\uff08\u9017\u53f7\u5206\u9694\uff09",
       value: (entry?.tags || []).join(","),
     });
+    const btnAiTitle = create("button", { class: "pv-btn pv-ai-tag-btn", text: "AI \u6807\u9898" });
     const btnAiTag = create("button", { class: "pv-btn pv-ai-tag-btn", text: "AI \u6807\u7b7e" });
+    const btnAiTitleTags = create("button", { class: "pv-btn pv-ai-tag-btn", text: "AI \u6807\u9898+\u6807\u7b7e" });
+    const titleRow = create("div", { class: "pv-tags-row" }, [fieldTitle, btnAiTitle, btnAiTitleTags]);
     const tagsRow = create("div", { class: "pv-tags-row" }, [fieldTags, btnAiTag]);
+    const aiButtons = [btnAiTitle, btnAiTag, btnAiTitleTags];
+    let aiButtonsAvailable = false;
 
-    btnAiTag.addEventListener("click", async () => {
+    function setAiButtonsState(enabled, reason = "") {
+      aiButtonsAvailable = !!enabled;
+      aiButtons.forEach((button) => {
+        button.disabled = !enabled;
+        if (reason) button.title = reason;
+        else button.removeAttribute("title");
+      });
+    }
+
+    async function refreshAiButtonsState() {
+      setAiButtonsState(false, "正在检查 AI 配置");
+      try {
+        const config = await request("/llm/config");
+        const hasBaseUrl = !!String(config.base_url || "").trim();
+        const hasRules = Array.isArray(config.custom_system_prompts) && config.custom_system_prompts.length > 0;
+        const isEnabled = !!config.enabled && hasBaseUrl && hasRules;
+        if (isEnabled) {
+          setAiButtonsState(true, "");
+          return true;
+        }
+        let reason = "AI 生成功能未启用";
+        if (!config.enabled) reason = "请先在规则管理器中启用 AI 生成功能";
+        else if (!hasBaseUrl) reason = "请先配置有效的 LLM 地址";
+        else if (!hasRules) reason = "请先配置可用的生成规则";
+        setAiButtonsState(false, reason);
+        return false;
+      } catch (_error) {
+        setAiButtonsState(false, "AI 配置检查失败");
+        return false;
+      }
+    }
+
+    async function ensurePromptForAI() {
+      if (!aiButtonsAvailable) {
+        toast("AI 生成功能未启用或配置无效", "info");
+        return null;
+      }
       const pos = fieldPos.value.trim();
       const neg = fieldNeg.value.trim();
       if (!pos && !neg) {
         toast("\u8bf7\u5148\u586b\u5199\u6b63\u5411\u6216\u8d1f\u5411\u63d0\u793a\u8bcd", "info");
-        return;
+        return null;
       }
-      btnAiTag.disabled = true;
-      btnAiTag.textContent = "\u751f\u6210\u4e2d\u2026";
+      return { pos, neg };
+    }
+
+    async function withAiButton(button, idleText, task) {
+      button.disabled = true;
+      button.textContent = "\u751f\u6210\u4e2d\u2026";
       try {
+        return await task();
+      } catch (e) {
+        toast(`${idleText} \u5931\u8d25: ${e}`, "error");
+        return null;
+      } finally {
+        button.disabled = !aiButtonsAvailable;
+        button.textContent = idleText;
+      }
+    }
+
+    refreshAiButtonsState();
+
+    btnAiTitle.addEventListener("click", async () => {
+      const promptData = await ensurePromptForAI();
+      if (!promptData) return;
+      await withAiButton(btnAiTitle, "AI \u6807\u9898", async () => {
+        const res = await request("/llm/auto_title", {
+          method: "POST",
+          body: JSON.stringify({
+            positive: promptData.pos,
+            negative: promptData.neg,
+            existing_title: fieldTitle.value.trim(),
+            existing_tags: parseCommaList(fieldTags.value),
+          }),
+        });
+        if (res.error) {
+          toast(res.error, "error");
+          return;
+        }
+        if (!res.title) {
+          toast("LLM \u672a\u8fd4\u56de\u6807\u9898", "info");
+          return;
+        }
+        fieldTitle.value = res.title;
+        toast("\u5df2\u751f\u6210\u6807\u9898", "success");
+      });
+    });
+
+    btnAiTag.addEventListener("click", async () => {
+      const promptData = await ensurePromptForAI();
+      if (!promptData) return;
+      await withAiButton(btnAiTag, "AI \u6807\u7b7e", async () => {
         const existing = parseCommaList(fieldTags.value);
         const res = await request("/llm/auto_tag", {
           method: "POST",
-          body: JSON.stringify({ positive: pos, negative: neg, existing_tags: existing }),
+          body: JSON.stringify({ positive: promptData.pos, negative: promptData.neg, existing_tags: existing }),
         });
         if (res.error) {
           toast(res.error, "error");
@@ -692,17 +656,50 @@ function openManager() {
           toast("LLM \u672a\u8fd4\u56de\u6807\u7b7e", "info");
           return;
         }
-        openTagPicker(suggested, existing, (selected) => {
+        await ensureLLMModule();
+        window.PromptVaultLLM.openTagPicker(suggested, existing, (selected) => {
           const merged = [...new Set([...existing, ...selected])];
           fieldTags.value = merged.join(",");
           toast(`\u5df2\u6dfb\u52a0 ${selected.length} \u4e2a\u6807\u7b7e`, "success");
         });
-      } catch (e) {
-        toast(`AI \u6807\u7b7e\u5931\u8d25: ${e}`, "error");
-      } finally {
-        btnAiTag.disabled = false;
-        btnAiTag.textContent = "AI \u6807\u7b7e";
-      }
+      });
+    });
+
+    btnAiTitleTags.addEventListener("click", async () => {
+      const promptData = await ensurePromptForAI();
+      if (!promptData) return;
+      await withAiButton(btnAiTitleTags, "AI \u6807\u9898+\u6807\u7b7e", async () => {
+        const existing = parseCommaList(fieldTags.value);
+        const res = await request("/llm/auto_title_tags", {
+          method: "POST",
+          body: JSON.stringify({
+            positive: promptData.pos,
+            negative: promptData.neg,
+            existing_title: fieldTitle.value.trim(),
+            existing_tags: existing,
+          }),
+        });
+        if (res.error) {
+          toast(res.error, "error");
+          return;
+        }
+        if (res.title) fieldTitle.value = res.title;
+        const suggested = res.tags || [];
+        if (!suggested.length) {
+          toast(res.title ? "\u5df2\u751f\u6210\u6807\u9898" : "LLM \u672a\u8fd4\u56de\u6807\u7b7e", res.title ? "success" : "info");
+          return;
+        }
+        await ensureLLMModule();
+        window.PromptVaultLLM.openTagPicker(suggested, existing, (selected) => {
+          const merged = [...new Set([...existing, ...selected])];
+          fieldTags.value = merged.join(",");
+          if (res.title) {
+            toast(`\u5df2\u751f\u6210\u6807\u9898\u5e76\u6dfb\u52a0 ${selected.length} \u4e2a\u6807\u7b7e`, "success");
+          } else {
+            toast(`\u5df2\u6dfb\u52a0 ${selected.length} \u4e2a\u6807\u7b7e`, "success");
+          }
+        });
+      });
     });
 
     const fieldModel = create("input", {
@@ -936,7 +933,7 @@ function openManager() {
     overlayEditor.addEventListener("keydown", editorKeyHandler);
 
     const content = create("div", { class: "pv-editor-body" }, [
-      fieldTitle,
+      titleRow,
       tagsRow,
       fieldModel,
       create("div", { class: "pv-detail-title", text: "\u7f29\u7565\u56fe\uff08\u4e0a\u4f20\u542b\u5143\u6570\u636e\u7684\u56fe\u7247\u53ef\u81ea\u52a8\u586b\u5145\u53c2\u6570\uff09" }),
@@ -965,19 +962,25 @@ function openManager() {
     if (inputTags.value.trim()) params.set("tags", inputTags.value.trim());
     if (inputModel.value.trim()) params.set("model", inputModel.value.trim());
     params.set("status", currentStatus);
-    params.set("limit", "50");
+    params.set("limit", String(pageLimit));
+    params.set("offset", String(currentOffset));
 
     const result = await request(`/entries?${params.toString()}`);
+    currentTotal = Math.max(0, Number(result.total || 0));
+    if (currentTotal > 0 && currentOffset >= currentTotal) {
+      currentOffset = Math.max(0, Math.floor((currentTotal - 1) / pageLimit) * pageLimit);
+      return await reloadList();
+    }
     list.textContent = "";
     const totalCount = result.items?.length || 0;
-    statusBarLeft.textContent = `\u5171 ${totalCount} \u6761\u8bb0\u5f55` + (currentStatus === "deleted" ? "\uff08\u56de\u6536\u7ad9\uff09" : "");
-    statusBarRight.textContent = "";
+    updatePaginationUI(totalCount);
     if (!totalCount) {
       list.appendChild(create("div", { class: "pv-empty", text: "\u6ca1\u6709\u627e\u5230\u8bb0\u5f55\u3002" }));
       return;
     }
 
     for (const item of result.items) {
+      const rowIndex = currentOffset + list.childElementCount + 1;
       const row = create("div", { class: "pv-row" });
       const thumb = create("img", {
         class: "pv-row-thumb",
@@ -989,6 +992,7 @@ function openManager() {
       const timeText = formatTimestamp(item.updated_at);
       const subText = tagsText ? `\u6807\u7b7e: ${tagsText}  \u00b7  ${timeText}` : timeText;
       const left = create("div", { class: "pv-row-left" }, [
+        create("div", { class: "pv-row-index", text: String(rowIndex) }),
         thumb,
         create("div", { class: "pv-row-title", text: item.title || "(\u672a\u547d\u540d)" }),
         create("div", { class: "pv-row-sub", text: subText }),
@@ -1113,7 +1117,10 @@ function openManager() {
   }
 
   /* ── Keyboard: Enter to search, Escape to close ── */
-  const triggerSearch = () => reloadList().catch((e) => toast(String(e), "error"));
+  const triggerSearch = () => {
+    resetPagination();
+    reloadList().catch((e) => toast(String(e), "error"));
+  };
   buttonSearch.addEventListener("click", triggerSearch);
   [inputQuery, inputTags, inputModel].forEach((inp) => {
     inp.addEventListener("keydown", (e) => {

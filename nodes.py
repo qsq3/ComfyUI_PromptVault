@@ -1,8 +1,10 @@
+import asyncio
 import io
 import json
 import logging
 import os
 import re
+import threading
 from collections import deque
 from pathlib import Path
 
@@ -14,6 +16,7 @@ from PIL import Image
 from .promptvault.assemble import assemble_entry
 from .promptvault.db import PromptVaultStore
 from .promptvault.image_metadata import extract_comfyui_metadata
+from .promptvault.llm import LLMClient, normalize_config
 
 
 def _make_thumbnail_png(image_tensor, target_width=256):
@@ -609,6 +612,102 @@ def _first_five_chars(text):
     return (text or "").strip()[:5]
 
 
+def _run_async_sync(awaitable):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(awaitable)
+
+    result = {"value": None, "error": None}
+
+    def _worker():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result["value"] = loop.run_until_complete(awaitable)
+        except Exception as exc:
+            result["error"] = exc
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    thread = threading.Thread(target=_worker, name="PromptVaultAsyncRunner", daemon=True)
+    thread.start()
+    thread.join()
+    if result["error"] is not None:
+        raise result["error"]
+    return result["value"]
+
+
+def _maybe_auto_fill_with_llm(title, tags, positive, negative, auto_generate, auto_generate_mode):
+    final_title = (title or "").strip()
+    final_tags = list(tags or [])
+
+    if not auto_generate:
+        return final_title, final_tags, False
+    if not (positive or negative):
+        return final_title, final_tags, False
+
+    need_title = auto_generate_mode in {"title_only", "title_and_tags"} or (
+        auto_generate_mode == "auto" and not final_title
+    )
+    need_tags = auto_generate_mode in {"tags_only", "title_and_tags"} or (
+        auto_generate_mode == "auto" and not final_tags
+    )
+    if not need_title and not need_tags:
+        return final_title, final_tags, False
+
+    store = PromptVaultStore.get()
+    config = normalize_config(store.get_llm_config())
+    if not config.get("enabled"):
+        logger.info("PromptVaultSaveNode auto_generate skipped: llm disabled")
+        return final_title, final_tags, False
+
+    client = LLMClient(config)
+    changed = False
+    try:
+        if need_title and need_tags:
+            result = _run_async_sync(
+                client.auto_title_and_tags(
+                    positive,
+                    negative,
+                    existing_title=final_title,
+                    existing_tags=final_tags,
+                )
+            ) or {}
+            new_title = str(result.get("title") or "").strip()
+            new_tags = [str(tag).strip() for tag in (result.get("tags") or []) if str(tag).strip()]
+            if new_title:
+                final_title = new_title
+                changed = True
+            if new_tags:
+                final_tags = list(dict.fromkeys(final_tags + new_tags))[:5]
+                changed = True
+        elif need_title:
+            new_title = _run_async_sync(
+                client.auto_title(
+                    positive,
+                    negative,
+                    existing_title=final_title,
+                    existing_tags=final_tags,
+                )
+            )
+            new_title = str(new_title or "").strip()
+            if new_title:
+                final_title = new_title
+                changed = True
+        elif need_tags:
+            new_tags = _run_async_sync(client.auto_tag(positive, negative, final_tags)) or []
+            new_tags = [str(tag).strip() for tag in new_tags if str(tag).strip()]
+            if new_tags:
+                final_tags = list(dict.fromkeys(final_tags + new_tags))[:5]
+                changed = True
+    except Exception as exc:
+        logger.warning("PromptVaultSaveNode auto_generate failed: %s", exc)
+
+    return final_title, final_tags, changed
+
+
 class PromptVaultQueryNode:
     @classmethod
     def INPUT_TYPES(cls):
@@ -726,6 +825,8 @@ class PromptVaultSaveNode:
             "optional": {
                 "tags": ("STRING", {"default": "", "multiline": False}),
                 "model": ("STRING", {"default": "", "multiline": False}),
+                "auto_generate": ("BOOLEAN", {"default": False}),
+                "auto_generate_mode": (["auto", "title_only", "tags_only", "title_and_tags"], {"default": "title_and_tags"}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -739,7 +840,17 @@ class PromptVaultSaveNode:
     OUTPUT_NODE = True
     CATEGORY = "PromptVault"
 
-    def run(self, image, title, tags="", model="", prompt=None, extra_pnginfo=None):
+    def run(
+        self,
+        image,
+        title,
+        tags="",
+        model="",
+        auto_generate=True,
+        auto_generate_mode="auto",
+        prompt=None,
+        extra_pnginfo=None,
+    ):
         try:
             thumb_png, thumb_w, thumb_h = _make_thumbnail_png(image, target_width=256)
         except Exception as exc:
@@ -773,10 +884,19 @@ class PromptVaultSaveNode:
         fallback5 = _first_five_chars(positive)
 
         final_title = (title or "").strip()
+        tag_list = [t.strip() for t in (tags or "").split(",") if t.strip()]
+
+        final_title, tag_list, llm_changed = _maybe_auto_fill_with_llm(
+            final_title,
+            tag_list,
+            positive,
+            data.get("negative", ""),
+            bool(auto_generate),
+            str(auto_generate_mode or "auto"),
+        )
+
         if not final_title:
             final_title = fallback5 or "未命名"
-
-        tag_list = [t.strip() for t in (tags or "").split(",") if t.strip()]
         if not tag_list and fallback5:
             tag_list = [fallback5]
 
@@ -808,7 +928,10 @@ class PromptVaultSaveNode:
         try:
             store = PromptVaultStore.get()
             entry = store.create_entry(payload)
-            return (entry.get("id", ""), "保存成功")
+            status = "保存成功"
+            if llm_changed:
+                status += " (AI 已补全标题或标签)"
+            return (entry.get("id", ""), status)
         except Exception as exc:
             return ("", f"保存失败: {exc}")
 

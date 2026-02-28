@@ -92,6 +92,12 @@
   max-width: 88px;
   flex: 0 0 auto;
 }
+.pv-toolbar-page-info {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.68);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
 
 /* ── Input ── */
 .pv-input {
@@ -387,12 +393,20 @@
 }
 .pv-row-left {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto auto 1fr;
   grid-template-rows: auto auto;
   column-gap: 10px;
   row-gap: 2px;
   align-items: center;
   min-width: 0;
+}
+.pv-row-index {
+  min-width: 22px;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.55);
+  text-align: right;
+  grid-row: 1 / span 2;
 }
 .pv-row-thumb {
   width: 44px;
@@ -527,11 +541,13 @@
   gap: 8px;
   justify-content: flex-end;
   position: sticky;
-  bottom: 0;
-  padding-top: 10px;
-  padding-bottom: 4px;
+  bottom: -14px;
+  margin: 6px -14px -14px;
+  padding: 12px 14px 14px;
   background: #111418;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0 0 12px 12px;
+  z-index: 1;
 }
 
 /* ── Status bar ── */
@@ -555,6 +571,18 @@
 .pv-statusbar-right {
   margin-left: 16px;
   text-align: right;
+  overflow: visible;
+  text-overflow: clip;
+  flex-shrink: 0;
+}
+.pv-statusbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.pv-pagination-info {
+  opacity: 0.85;
 }
 
 /* ── Toast notifications ── */
@@ -650,99 +678,20 @@
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
 }
 .pv-input-flex {
   flex: 1;
   min-width: 0;
 }
-.pv-ai-tag-btn {
-  background: linear-gradient(135deg, #2d5a3d, #1a6040);
-  border-color: rgba(46, 204, 113, 0.2);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-.pv-ai-tag-btn:hover {
-  background: linear-gradient(135deg, #367048, #20724c);
-}
-.pv-ai-tag-btn:disabled {
-  opacity: 0.6;
-  cursor: wait;
+
+.pv-editor .pv-ai-tag-btn {
+  background: linear-gradient(135deg, #2c5b3e, #1f704b);
+  border-color: rgba(80, 200, 120, 0.24);
 }
 
-/* ── Tag picker panel ── */
-.pv-tag-picker {
-  width: min(480px, 88vw);
-  height: auto;
-  max-height: min(520px, 80vh);
-}
-.pv-tag-picker-body {
-  padding: 14px;
-  overflow-y: auto;
-  max-height: 340px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.pv-tag-picker-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  border-radius: 6px;
-  font-size: 13px;
-  transition: background 0.15s;
-}
-.pv-tag-picker-item:hover {
-  background: rgba(255, 255, 255, 0.04);
-}
-.pv-tag-picker-item input[type="checkbox"] {
-  accent-color: #1a6090;
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.pv-tag-picker-item label {
-  cursor: pointer;
-  user-select: none;
-}
-.pv-tag-existing {
-  opacity: 0.45;
-  font-style: italic;
-}
-
-/* ── LLM settings panel ── */
-.pv-llm-settings {
-  width: min(560px, 90vw);
-  height: auto;
-  max-height: min(640px, 86vh);
-}
-.pv-llm-switch {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  cursor: pointer;
-  padding: 4px 0;
-  user-select: none;
-}
-.pv-llm-switch input[type="checkbox"] {
-  accent-color: #1a6090;
-  width: 18px;
-  height: 18px;
-  cursor: pointer;
-}
-.pv-llm-test-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 4px;
-}
-.pv-llm-test-result {
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.pv-editor .pv-ai-tag-btn:hover {
+  background: linear-gradient(135deg, #347149, #258557);
 }
 
 /* ── Responsive ── */
@@ -752,5 +701,13 @@
   }
   .pv-split {
     grid-template-columns: 1fr;
+  }
+  .pv-editor-actions {
+    bottom: -14px;
+    margin-left: -14px;
+    margin-right: -14px;
+    margin-bottom: -14px;
+    padding-left: 14px;
+    padding-right: 14px;
   }
 }

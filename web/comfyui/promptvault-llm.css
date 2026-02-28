@@ -1,0 +1,404 @@
+/* PromptVault LLM / AI 样式
+ * 仅保留专用布局尺寸，视觉风格统一复用主窗口 promptvault.css。
+ */
+
+.pv-ai-tag-btn {
+  flex-shrink: 0;
+}
+
+.pv-ai-tag-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+  box-shadow: none;
+}
+
+.pv-tag-picker {
+  width: min(480px, 88vw);
+  max-height: min(520px, 80vh);
+}
+
+.pv-tag-picker-body {
+  padding: 14px;
+  overflow-y: auto;
+  max-height: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pv-tag-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+
+.pv-tag-picker-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.pv-tag-picker-item input[type="checkbox"] {
+  accent-color: #1a6090;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.pv-tag-picker-item label {
+  cursor: pointer;
+  user-select: none;
+}
+
+.pv-tag-existing {
+  opacity: 0.45;
+}
+
+.pv-llm-settings {
+  width: min(820px, 95vw);
+  height: min(760px, 88vh);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pv-llm-settings .pv-editor-body {
+  gap: 12px;
+}
+
+.pv-llm-title-close {
+  min-width: 32px;
+  padding-inline: 10px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.pv-llm-form-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.pv-llm-form-row .pv-llm-field-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.pv-llm-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 13px;
+  color: #e7e7e7;
+  cursor: pointer;
+  user-select: none;
+}
+
+.pv-llm-switch input[type="checkbox"] {
+  accent-color: #1a6090;
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.pv-llm-test-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pv-llm-test-result {
+  min-width: 0;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.pv-llm-rules-section {
+  padding-top: 14px;
+  margin-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.pv-llm-rules-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.pv-llm-rules-section-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0.9;
+  color: #e7e7e7;
+}
+
+.pv-llm-add-rule {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pv-llm-add-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.pv-llm-rules-table-wrap {
+  overflow-x: auto;
+  overflow-y: auto;
+  margin-bottom: 12px;
+  background: #0c0f13;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  max-height: 220px;
+}
+
+.pv-llm-rules-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.pv-llm-rules-table th,
+.pv-llm-rules-table td {
+  padding: 7px 10px;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.pv-llm-rules-table th {
+  color: #8ba3b8;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  background: rgba(255, 255, 255, 0.03);
+  white-space: nowrap;
+}
+
+.pv-llm-rules-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.pv-llm-rules-table tr:last-child th,
+.pv-llm-rules-table tr:last-child td {
+  border-bottom: none;
+}
+
+.pv-llm-th-status,
+.pv-llm-td-status {
+  width: 48px;
+  text-align: center;
+}
+
+.pv-llm-status-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.pv-llm-radio-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.pv-llm-radio-visual {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+  background: transparent;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.pv-llm-radio-visual.pv-llm-radio-checked {
+  background: #1a6090;
+  border-color: #1a6090;
+  box-shadow: 0 0 0 2px rgba(100, 160, 255, 0.12);
+}
+
+.pv-llm-radio-visual.pv-llm-radio-checked::after {
+  content: "\2713";
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.pv-llm-th-name,
+.pv-llm-td-name {
+  min-width: 100px;
+  max-width: 140px;
+}
+
+.pv-llm-th-type,
+.pv-llm-td-type {
+  width: 96px;
+}
+
+.pv-llm-type-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(22, 75, 104, 0.32);
+  border: 1px solid rgba(100, 180, 255, 0.16);
+  color: #d5e4f2;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.pv-llm-th-content,
+.pv-llm-td-content {
+  min-width: 120px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 11px;
+}
+
+.pv-llm-th-actions,
+.pv-llm-td-actions {
+  width: 68px;
+  white-space: nowrap;
+  padding-left: 8px;
+}
+
+.pv-llm-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  margin: 0 2px;
+  color: rgba(255, 255, 255, 0.55);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.pv-llm-icon-btn:hover {
+  color: #e7e7e7;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.pv-llm-icon-btn svg {
+  flex-shrink: 0;
+}
+
+.pv-llm-rule-row-active {
+  background: rgba(100, 160, 255, 0.06);
+}
+
+.pv-llm-task-select {
+  min-width: 160px;
+}
+
+.pv-llm-prompt-textarea {
+  min-height: 100px;
+}
+
+.pv-llm-editor-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  background: #0c0f13;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+
+.pv-llm-editor-card .pv-detail-title {
+  margin-bottom: 0;
+}
+
+.pv-llm-footer-actions {
+  position: sticky;
+  bottom: -14px;
+  margin: 6px -14px -14px;
+  padding: 12px 14px 14px;
+  background: #111418;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0 0 12px 12px;
+  z-index: 1;
+}
+
+.pv-llm-settings .pv-editor-body::-webkit-scrollbar,
+.pv-tag-picker-body::-webkit-scrollbar,
+.pv-llm-rules-table-wrap::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.pv-llm-settings .pv-editor-body::-webkit-scrollbar-track,
+.pv-tag-picker-body::-webkit-scrollbar-track,
+.pv-llm-rules-table-wrap::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.pv-llm-settings .pv-editor-body::-webkit-scrollbar-thumb,
+.pv-tag-picker-body::-webkit-scrollbar-thumb,
+.pv-llm-rules-table-wrap::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+}
+
+.pv-llm-settings .pv-editor-body::-webkit-scrollbar-thumb:hover,
+.pv-tag-picker-body::-webkit-scrollbar-thumb:hover,
+.pv-llm-rules-table-wrap::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.pv-llm-settings .pv-editor-body,
+.pv-tag-picker-body,
+.pv-llm-rules-table-wrap {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+
+@media (max-width: 700px) {
+  .pv-llm-test-row,
+  .pv-llm-rules-head-row,
+  .pv-llm-form-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .pv-llm-test-result {
+    white-space: normal;
+  }
+
+  .pv-llm-footer-actions {
+    bottom: -14px;
+    margin-left: -14px;
+    margin-right: -14px;
+    margin-bottom: -14px;
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+}
