@@ -1,6 +1,7 @@
 import csv
 import io
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -137,6 +138,20 @@ class PromptVaultImportExportTests(unittest.TestCase):
                 self.assertEqual(other_store.get_entry("entry_demo")["variables"]["subject"], "cat")
 
         self.assertEqual(result["created"], 3)
+
+    def test_import_csv_text_accepts_large_field(self):
+        long_positive = "女" * (csv.field_size_limit() + 1024)
+        csv_text = "\n".join(
+            [
+                "record_type,id,title,text,ir_json,status,version,lang,template_id,tags_json,model_scope_json,variables_json,fragments_json,raw_json,negative_json,params_json,favorite,score,hash,thumbnail_b64,thumbnail_width,thumbnail_height,created_at,updated_at",
+                f'entry,entry_large,大字段记录,,,active,,zh-CN,,"[]","[]","{{}}","[]","{{""positive"":""{long_positive}"",""negative"":""""}}","{{""raw"":""""}}","{{}}",0,0.0,,,,,',
+            ]
+        )
+
+        result = self.store.import_csv_text(csv_text, conflict_strategy="merge")
+
+        self.assertEqual(result["created"], 1)
+        self.assertEqual(self.store.get_entry("entry_large")["raw"]["positive"], long_positive)
 
 
 if __name__ == "__main__":

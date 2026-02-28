@@ -65,6 +65,20 @@ CREATE TABLE IF NOT EXISTS tags (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS entry_tags (
+  entry_id TEXT NOT NULL,
+  tag TEXT NOT NULL,
+  PRIMARY KEY (entry_id, tag),
+  FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS entry_models (
+  entry_id TEXT NOT NULL,
+  model TEXT NOT NULL,
+  PRIMARY KEY (entry_id, model),
+  FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE
+);
+
 -- FTS for fast keyword search; keep it simple for V1.
 CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
   entry_id UNINDEXED,
@@ -75,4 +89,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
 );
 
 CREATE INDEX IF NOT EXISTS idx_entries_status_updated ON entries(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_entries_favorite ON entries(favorite);
+CREATE INDEX IF NOT EXISTS idx_entries_score ON entries(score, updated_at);
+CREATE INDEX IF NOT EXISTS idx_entries_status_updated_id ON entries(status, updated_at DESC, id ASC);
+CREATE INDEX IF NOT EXISTS idx_entries_status_score_updated_id ON entries(status, score DESC, updated_at DESC, id ASC);
+CREATE INDEX IF NOT EXISTS idx_entries_status_favorite_score_updated_id
+  ON entries(status, favorite DESC, score DESC, updated_at DESC, id ASC);
+CREATE INDEX IF NOT EXISTS idx_entry_tags_tag_entry ON entry_tags(tag, entry_id);
+CREATE INDEX IF NOT EXISTS idx_entry_models_model_entry ON entry_models(model, entry_id);
 """

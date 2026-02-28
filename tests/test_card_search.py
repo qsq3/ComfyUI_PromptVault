@@ -64,10 +64,14 @@ class PromptVaultCardSearchTests(unittest.TestCase):
             "best quality portrait close-up",
             tags=["portrait", "favorite"],
         )
-
-        self.store.update_entry(low["id"], {"score": 2.5, "favorite": 0})
-        self.store.update_entry(high["id"], {"score": 9.1, "favorite": 1})
-
+        self.store.update_entry(
+            low["id"],
+            {"score": 2.5, "favorite": 0, "version": low["version"]},
+        )
+        self.store.update_entry(
+            high["id"],
+            {"score": 9.1, "favorite": 1, "version": high["version"]},
+        )
         items = self.store.search_entries(sort="score_desc", favorite_only=True)
 
         self.assertEqual(len(items), 1)

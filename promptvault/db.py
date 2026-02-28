@@ -16,6 +16,10 @@ from .schema import SCHEMA_SQL
 from .utils import json_dumps, normalize_tags, normalize_text, now_iso, stable_hash
 
 
+class OptimisticLockError(ValueError):
+    pass
+
+
 class PromptVaultStore:
     _instance = None
     _lock = threading.Lock()
@@ -46,7 +50,7 @@ class PromptVaultStore:
             self._migrate_db(conn)
             conn.execute(
                 "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version', ?)",
-                ("2",),
+                ("3",),
             )
             conn.commit()
         finally:
@@ -66,6 +70,39 @@ class PromptVaultStore:
             conn.execute("ALTER TABLE entries ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0")
         if "score" not in cols:
             conn.execute("ALTER TABLE entries ADD COLUMN score REAL NOT NULL DEFAULT 0.0")
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS entry_tags (
+              entry_id TEXT NOT NULL,
+              tag TEXT NOT NULL,
+              PRIMARY KEY (entry_id, tag),
+              FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS entry_models (
+              entry_id TEXT NOT NULL,
+              model TEXT NOT NULL,
+              PRIMARY KEY (entry_id, model),
+              FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_entries_status_updated_id
+              ON entries(status, updated_at DESC, id ASC);
+            CREATE INDEX IF NOT EXISTS idx_entries_status_score_updated_id
+              ON entries(status, score DESC, updated_at DESC, id ASC);
+            CREATE INDEX IF NOT EXISTS idx_entries_status_favorite_score_updated_id
+              ON entries(status, favorite DESC, score DESC, updated_at DESC, id ASC);
+            CREATE INDEX IF NOT EXISTS idx_entry_tags_tag_entry ON entry_tags(tag, entry_id);
+            CREATE INDEX IF NOT EXISTS idx_entry_models_model_entry ON entry_models(model, entry_id);
+            """
+        )
+        lookup_version = conn.execute(
+            "SELECT value FROM meta WHERE key = 'lookup_index_version'"
+        ).fetchone()
+        if not lookup_version or lookup_version["value"] != "1":
+            self._rebuild_lookup_indexes(conn)
+            conn.execute(
+                "INSERT OR REPLACE INTO meta(key,value) VALUES('lookup_index_version', ?)",
+                ("1",),
+            )
 
     def _fts_upsert(self, conn, entry):
         tags = " ".join(entry.get("tags", []))
@@ -82,6 +119,38 @@ class PromptVaultStore:
             "INSERT INTO entries_fts(entry_id,title,content,tags) VALUES(?,?,?,?)",
             (entry["id"], entry.get("title", ""), content, tags),
         )
+
+    @staticmethod
+    def _sync_lookup_rows(conn, entry_id, tags, model_scope):
+        conn.execute("DELETE FROM entry_tags WHERE entry_id = ?", (entry_id,))
+        conn.execute("DELETE FROM entry_models WHERE entry_id = ?", (entry_id,))
+        for tag in normalize_tags(tags or []):
+            conn.execute(
+                "INSERT OR IGNORE INTO entry_tags(entry_id,tag) VALUES(?,?)",
+                (entry_id, tag),
+            )
+        for model in normalize_tags(model_scope or []):
+            conn.execute(
+                "INSERT OR IGNORE INTO entry_models(entry_id,model) VALUES(?,?)",
+                (entry_id, model),
+            )
+
+    def _rebuild_lookup_indexes(self, conn):
+        conn.execute("DELETE FROM entry_tags")
+        conn.execute("DELETE FROM entry_models")
+        rows = conn.execute(
+            "SELECT id, tags_json, model_scope_json FROM entries"
+        ).fetchall()
+        for row in rows:
+            try:
+                tags = json.loads(row["tags_json"] or "[]")
+            except Exception:
+                tags = []
+            try:
+                model_scope = json.loads(row["model_scope_json"] or "[]")
+            except Exception:
+                model_scope = []
+            self._sync_lookup_rows(conn, row["id"], tags, model_scope)
 
     def create_entry(self, payload):
         title = normalize_text(payload.get("title", "")) or "未命名"
@@ -164,6 +233,7 @@ class PromptVaultStore:
             )
             for t in tags:
                 conn.execute("INSERT OR IGNORE INTO tags(name,created_at) VALUES(?,?)", (t, now))
+            self._sync_lookup_rows(conn, entry_obj["id"], entry_obj["tags"], entry_obj["model_scope"])
             self._fts_upsert(conn, entry_obj)
             conn.commit()
             return entry_obj
@@ -318,6 +388,19 @@ class PromptVaultStore:
             row = conn.execute("SELECT * FROM entries WHERE id = ?", (entry_id,)).fetchone()
             if not row:
                 raise KeyError("entry not found")
+            payload_version = payload.get("version")
+            payload_updated_at = normalize_text(payload.get("updated_at", ""))
+            if payload_version is None and not payload_updated_at:
+                raise ValueError("update requires version or updated_at")
+            if payload_version is not None:
+                try:
+                    expected_version = int(payload_version)
+                except (TypeError, ValueError):
+                    raise ValueError("invalid version")
+                if expected_version != int(row["version"]):
+                    raise OptimisticLockError("stale version")
+            elif payload_updated_at != normalize_text(row["updated_at"]):
+                raise OptimisticLockError("stale updated_at")
             entry = self._row_to_entry(row)
 
             current_thumb_blob = row["thumbnail_png"]
@@ -419,6 +502,7 @@ class PromptVaultStore:
             )
             for t in entry["tags"]:
                 conn.execute("INSERT OR IGNORE INTO tags(name,created_at) VALUES(?,?)", (t, entry["updated_at"]))
+            self._sync_lookup_rows(conn, entry["id"], entry["tags"], entry["model_scope"])
             self._fts_upsert(conn, entry)
             conn.commit()
             return entry
@@ -445,6 +529,7 @@ class PromptVaultStore:
                 "INSERT INTO entry_versions(entry_id,version,snapshot_json,created_at) VALUES(?,?,?,?)",
                 (entry["id"], entry["version"], json_dumps(entry), entry["updated_at"]),
             )
+            self._sync_lookup_rows(conn, entry["id"], entry["tags"], entry["model_scope"])
             self._fts_upsert(conn, entry)
             conn.commit()
             return entry
@@ -465,6 +550,8 @@ class PromptVaultStore:
             placeholders = ",".join(["?"] * len(ids))
             conn.execute(f"DELETE FROM entry_versions WHERE entry_id IN ({placeholders})", ids)
             conn.execute(f"DELETE FROM entries_fts WHERE entry_id IN ({placeholders})", ids)
+            conn.execute(f"DELETE FROM entry_tags WHERE entry_id IN ({placeholders})", ids)
+            conn.execute(f"DELETE FROM entry_models WHERE entry_id IN ({placeholders})", ids)
             conn.execute(f"DELETE FROM entries WHERE id IN ({placeholders})", ids)
             conn.commit()
             return len(ids)
@@ -562,12 +649,16 @@ class PromptVaultStore:
             params = [status]
 
             if model:
-                where.append("e.model_scope_json LIKE ?")
-                params.append(f"%{model}%")
+                where.append(
+                    "EXISTS (SELECT 1 FROM entry_models em WHERE em.entry_id = e.id AND em.model = ?)"
+                )
+                params.append(model)
 
             for t in tags:
-                where.append("e.tags_json LIKE ?")
-                params.append(f"%{t}%")
+                where.append(
+                    "EXISTS (SELECT 1 FROM entry_tags et WHERE et.entry_id = e.id AND et.tag = ?)"
+                )
+                params.append(t)
 
             if favorite_only:
                 where.append("e.favorite = 1")
@@ -627,6 +718,7 @@ class PromptVaultStore:
                         "updated_at": r["updated_at"],
                     }
                 )
+            items = self._prioritize_title_matches(items, q=q)
             logger.debug("return_items=%d", len(items))
             return items
         finally:
@@ -643,12 +735,16 @@ class PromptVaultStore:
             params = [status]
 
             if model:
-                where.append("e.model_scope_json LIKE ?")
-                params.append(f"%{model}%")
+                where.append(
+                    "EXISTS (SELECT 1 FROM entry_models em WHERE em.entry_id = e.id AND em.model = ?)"
+                )
+                params.append(model)
 
             for tag in tags:
-                where.append("e.tags_json LIKE ?")
-                params.append(f"%{tag}%")
+                where.append(
+                    "EXISTS (SELECT 1 FROM entry_tags et WHERE et.entry_id = e.id AND et.tag = ?)"
+                )
+                params.append(tag)
 
             if favorite_only:
                 where.append("e.favorite = 1")
@@ -672,12 +768,12 @@ class PromptVaultStore:
     @staticmethod
     def _search_order_by(sort="updated_desc", with_fts=False):
         if sort == "score_desc":
-            return "e.score DESC, e.updated_at DESC"
+            return "e.score DESC, e.updated_at DESC, e.id ASC"
         if sort == "favorite_desc":
-            return "e.favorite DESC, e.score DESC, e.updated_at DESC"
+            return "e.favorite DESC, e.score DESC, e.updated_at DESC, e.id ASC"
         if with_fts:
-            return "bm25(entries_fts) ASC, e.updated_at DESC"
-        return "e.updated_at DESC"
+            return "bm25(entries_fts) ASC, e.updated_at DESC, e.id ASC"
+        return "e.updated_at DESC, e.id ASC"
 
     @staticmethod
     def _positive_preview_from_raw_json(raw_json, limit=96):
@@ -709,12 +805,41 @@ class PromptVaultStore:
         return reasons
 
     @staticmethod
+    def _prioritize_title_matches(items, q=""):
+        query = normalize_text(q).lower()
+        if not query:
+            return items
+        return sorted(
+            items,
+            key=lambda item: 0 if query in normalize_text((item or {}).get("title", "")).lower() else 1,
+        )
+
+    @staticmethod
     def _should_prefer_like(q):
         compact = "".join((q or "").split())
         if not compact:
             return False
         has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in compact)
-        return has_cjk and len(compact) <= 2
+        has_digit = any(ch.isdigit() for ch in compact)
+        has_alpha = any(("a" <= ch.lower() <= "z") for ch in compact)
+        has_symbol = any(not ch.isalnum() and not ("\u4e00" <= ch <= "\u9fff") for ch in compact)
+        is_upper_acronym = compact.isascii() and compact.isalpha() and compact.upper() == compact and len(compact) <= 6
+        is_short_english = compact.isascii() and compact.isalpha() and len(compact) <= 4
+        is_short_mixed = len(compact) <= 8 and has_digit and (has_alpha or has_cjk)
+
+        if has_cjk and len(compact) <= 2:
+            return True
+        if has_digit:
+            return True
+        if is_upper_acronym:
+            return True
+        if is_short_english:
+            return True
+        if is_short_mixed:
+            return True
+        if has_symbol and len(compact) <= 8:
+            return True
+        return False
 
     def _search_rows_with_keyword(self, conn, q, where, params, select_fields, sort, limit, offset):
         if self._should_prefer_like(q):
@@ -722,6 +847,16 @@ class PromptVaultStore:
             logger.debug("LIKE rows=%d (preferred)", len(rows))
             return rows
 
+        fetch_limit = int(limit) + int(offset)
+        title_rows = self._search_rows_title_like(
+            conn,
+            q,
+            where,
+            params,
+            select_fields,
+            sort,
+            fetch_limit,
+        )
         fts_q = self._escape_fts_query(q)
         sql = f"""
         SELECT {select_fields}
@@ -732,18 +867,45 @@ class PromptVaultStore:
         LIMIT ? OFFSET ?
         """
         try:
-            rows = conn.execute(sql, params + [fts_q, int(limit), int(offset)]).fetchall()
+            rows = conn.execute(sql, params + [fts_q, fetch_limit, 0]).fetchall()
             logger.debug("FTS rows=%d", len(rows))
         except sqlite3.OperationalError:
             logger.warning("FTS failed, fallback to LIKE")
-            rows = self._search_rows_like(conn, q, where, params, select_fields, sort, limit, offset)
+            rows = self._search_rows_like(conn, q, where, params, select_fields, sort, fetch_limit, 0)
             logger.debug("LIKE rows=%d (fts failed)", len(rows))
-            return rows
+            return self._merge_keyword_rows(title_rows, rows, offset=offset, limit=limit)
 
         if not rows:
-            rows = self._search_rows_like(conn, q, where, params, select_fields, sort, limit, offset)
+            rows = self._search_rows_like(conn, q, where, params, select_fields, sort, fetch_limit, 0)
             logger.debug("LIKE rows=%d (fts empty)", len(rows))
-        return rows
+        return self._merge_keyword_rows(title_rows, rows, offset=offset, limit=limit)
+
+    @staticmethod
+    def _merge_keyword_rows(title_rows, other_rows, offset=0, limit=20):
+        merged = []
+        seen = set()
+        for row in list(title_rows or []) + list(other_rows or []):
+            row_id = row["id"]
+            if row_id in seen:
+                continue
+            seen.add(row_id)
+            merged.append(row)
+        start = int(offset)
+        end = start + int(limit)
+        return merged[start:end]
+
+    def _search_rows_title_like(self, conn, q, where, params, select_fields, sort, limit):
+        title_where = list(where)
+        title_where.append("e.title LIKE ?")
+        like_q = f"%{q}%"
+        sql = f"""
+        SELECT {select_fields}
+        FROM entries e
+        WHERE {' AND '.join(title_where)}
+        ORDER BY {self._search_order_by(sort=sort, with_fts=False)}
+        LIMIT ?
+        """
+        return conn.execute(sql, params + [like_q, int(limit)]).fetchall()
 
     def _search_rows_like(self, conn, q, where, params, select_fields, sort, limit, offset):
         like_where = list(where)
@@ -768,12 +930,19 @@ class PromptVaultStore:
         fts_q = self._escape_fts_query(q)
         sql = f"""
         SELECT COUNT(*) AS total
-        FROM entries_fts f
-        JOIN entries e ON e.id = f.entry_id
-        WHERE ({' AND '.join(where)}) AND entries_fts MATCH ?
+        FROM (
+            SELECT e.id
+            FROM entries_fts f
+            JOIN entries e ON e.id = f.entry_id
+            WHERE ({' AND '.join(where)}) AND entries_fts MATCH ?
+            UNION
+            SELECT e.id
+            FROM entries e
+            WHERE ({' AND '.join(where)}) AND e.title LIKE ?
+        ) merged
         """
         try:
-            row = conn.execute(sql, params + [fts_q]).fetchone()
+            row = conn.execute(sql, params + [fts_q] + params + [f"%{q}%"]).fetchone()
             total = int((row or {})["total"] if row else 0)
         except sqlite3.OperationalError:
             return self._count_rows_like(conn, q, where, params)
@@ -1176,6 +1345,7 @@ class PromptVaultStore:
         )
         for tag in entry["tags"]:
             conn.execute("INSERT OR IGNORE INTO tags(name,created_at) VALUES(?,?)", (tag, entry["updated_at"]))
+        self._sync_lookup_rows(conn, entry["id"], entry["tags"], entry["model_scope"])
         self._fts_upsert(conn, entry)
         return "created"
 
@@ -1223,6 +1393,7 @@ class PromptVaultStore:
         )
         for tag in entry["tags"]:
             conn.execute("INSERT OR IGNORE INTO tags(name,created_at) VALUES(?,?)", (tag, entry["updated_at"]))
+        self._sync_lookup_rows(conn, entry["id"], entry["tags"], entry["model_scope"])
         self._fts_upsert(conn, entry)
         return "updated"
 

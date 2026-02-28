@@ -5,7 +5,7 @@ from datetime import datetime
 from aiohttp import web
 
 from .assemble import assemble_entry
-from .db import PromptVaultStore
+from .db import OptimisticLockError, PromptVaultStore
 
 
 def _json_response(obj, status=200):
@@ -18,6 +18,13 @@ def _json_response(obj, status=200):
 
 def _bad_request(msg):
     return _json_response({"error": msg}, status=400)
+
+
+def _safe_update_entry(store, entry_id, payload):
+    try:
+        return store.update_entry(entry_id, payload or {})
+    except OptimisticLockError as exc:
+        return _json_response({"error": str(exc)}, status=409)
 
 
 def _decode_thumbnail_b64(payload):
@@ -214,10 +221,10 @@ def setup_routes():
             return _bad_request("JSON 解析失败")
         _decode_thumbnail_b64(payload)
         try:
-            entry = store.update_entry(entry_id, payload or {})
+            entry = _safe_update_entry(store, entry_id, payload or {})
         except KeyError:
             return _json_response({"error": "未找到记录"}, status=404)
-        return _json_response(entry)
+        return entry if isinstance(entry, web.Response) else _json_response(entry)
 
     @routes.delete("/promptvault/entries/{entry_id}")
     async def delete_entry(request):

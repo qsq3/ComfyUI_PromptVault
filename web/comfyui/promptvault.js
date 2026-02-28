@@ -1062,7 +1062,11 @@ function openManager() {
       try {
         await request(`/entries/${encodeURIComponent(entry.id)}`, {
           method: "PUT",
-          body: JSON.stringify(patch),
+          body: JSON.stringify({
+            ...patch,
+            version: entry.version,
+            updated_at: entry.updated_at,
+          }),
         });
         const full = await request(`/entries/${encodeURIComponent(entry.id)}`);
         full.match_reasons = entry.match_reasons || [];
@@ -1560,6 +1564,8 @@ function openManager() {
         if (isNew) {
           await request("/entries", { method: "POST", body: JSON.stringify(payload) });
         } else {
+          payload.version = entry.version;
+          payload.updated_at = entry.updated_at;
           await request(`/entries/${encodeURIComponent(entry.id)}`, { method: "PUT", body: JSON.stringify(payload) });
         }
         closeEditor();
@@ -1686,7 +1692,7 @@ function openManager() {
           if (!confirm("确定还原记录？")) return;
           await request(`/entries/${encodeURIComponent(item.id)}`, {
             method: "PUT",
-            body: JSON.stringify({ status: "active" }),
+            body: JSON.stringify({ status: "active", updated_at: item.updated_at }),
           });
           toast("记录已还原", "success");
         } else {
