@@ -152,6 +152,41 @@ class PromptVaultStore:
                 model_scope = []
             self._sync_lookup_rows(conn, row["id"], tags, model_scope)
 
+    @staticmethod
+    def _reconcile_tags_table(conn):
+        entry_rows = conn.execute(
+            "SELECT tags_json FROM entries WHERE status != 'deleted'"
+        ).fetchall()
+        used_tags = set()
+        for er in entry_rows:
+            try:
+                tag_list = json.loads(er["tags_json"] or "[]")
+            except Exception:
+                tag_list = []
+            for tag in normalize_tags(tag_list):
+                used_tags.add(tag)
+
+        rows = conn.execute("SELECT name FROM tags").fetchall()
+        all_tag_names = [r["name"] for r in rows]
+        removed = 0
+        for name in all_tag_names:
+            if name not in used_tags:
+                conn.execute("DELETE FROM tags WHERE name = ?", (name,))
+                removed += 1
+
+        existing_rows = conn.execute("SELECT name FROM tags").fetchall()
+        existing = {r["name"] for r in existing_rows}
+        missing = sorted(used_tags - existing)
+        now = now_iso()
+        added = 0
+        for name in missing:
+            conn.execute(
+                "INSERT OR IGNORE INTO tags(name,created_at) VALUES(?,?)",
+                (name, now),
+            )
+            added += 1
+        return {"removed": removed, "added": added}
+
     def create_entry(self, payload):
         title = normalize_text(payload.get("title", "")) or "未命名"
         tags = normalize_tags(payload.get("tags", []))
@@ -531,6 +566,7 @@ class PromptVaultStore:
             )
             self._sync_lookup_rows(conn, entry["id"], entry["tags"], entry["model_scope"])
             self._fts_upsert(conn, entry)
+            self._reconcile_tags_table(conn)
             conn.commit()
             return entry
         finally:
@@ -566,41 +602,9 @@ class PromptVaultStore:
         """
         conn = self._connect()
         try:
-            entry_rows = conn.execute(
-                "SELECT tags_json FROM entries WHERE status != 'deleted'"
-            ).fetchall()
-            used_tags = set()
-            for er in entry_rows:
-                try:
-                    tlist = json.loads(er["tags_json"] or "[]")
-                except Exception:
-                    tlist = []
-                for t in tlist or []:
-                    if t:
-                        used_tags.add(str(t))
-
-            rows = conn.execute("SELECT name FROM tags").fetchall()
-            all_tag_names = [r["name"] for r in rows]
-            removed = 0
-            for name in all_tag_names:
-                if name not in used_tags:
-                    conn.execute("DELETE FROM tags WHERE name = ?", (name,))
-                    removed += 1
-
-            existing_rows = conn.execute("SELECT name FROM tags").fetchall()
-            existing = {r["name"] for r in existing_rows}
-            missing = sorted(used_tags - existing)
-            now = now_iso()
-            added = 0
-            for name in missing:
-                conn.execute(
-                    "INSERT OR IGNORE INTO tags(name,created_at) VALUES(?,?)",
-                    (name, now),
-                )
-                added += 1
-
+            result = self._reconcile_tags_table(conn)
             conn.commit()
-            return {"removed": removed, "added": added}
+            return result
         finally:
             conn.close()
 

@@ -527,7 +527,18 @@ function openManager() {
   const paginationInfo = create("span", { class: "pv-toolbar-page-info", text: "1 / 1 \u9875" });
   const buttonPrevPage = create("button", { class: "pv-btn pv-small", text: "\u4e0a\u4e00\u9875" });
   const buttonNextPage = create("button", { class: "pv-btn pv-small", text: "\u4e0b\u4e00\u9875" });
-  const buttonClose = create("button", { class: "pv-btn pv-danger", text: "\u5173\u95ed" });
+  const buttonMinimize = create("button", {
+    class: "pv-btn pv-icon-only",
+    text: "−",
+    title: "\u6700\u5c0f\u5316",
+    "aria-label": "\u6700\u5c0f\u5316",
+  });
+  const buttonClose = create("button", {
+    class: "pv-btn pv-danger pv-icon-only",
+    text: "×",
+    title: "\u5173\u95ed",
+    "aria-label": "\u5173\u95ed",
+  });
   const titleActions = create("div", { class: "pv-title-actions" }, [
     buttonNew,
     buttonImport,
@@ -536,6 +547,7 @@ function openManager() {
     buttonToggleSidebar,
     selectStatus,
     buttonPurge,
+    buttonMinimize,
     buttonClose,
   ]);
   const title = create("div", { class: "pv-title" }, [
@@ -592,19 +604,50 @@ function openManager() {
   let currentOffset = 0;
   let currentTotal = 0;
   let selectedCardId = "";
-  const pageLimit = 12;
   const quickFilters = {
     favorite_only: false,
     has_thumbnail: false,
   };
   let currentSort = "updated_desc";
   let currentViewMode = "card_compact";
+  let minimizedDock = null;
 
   sidebar.style.display = "none";
   body.classList.add("pv-body-no-sidebar");
 
+  function removeMinimizedDock() {
+    if (minimizedDock && document.body.contains(minimizedDock)) {
+      document.body.removeChild(minimizedDock);
+    }
+    minimizedDock = null;
+  }
+
+  function restoreManager() {
+    if (!document.body.contains(overlay)) {
+      document.body.appendChild(overlay);
+    }
+    removeMinimizedDock();
+  }
+
+  function minimizeManager() {
+    if (document.body.contains(overlay)) {
+      document.body.removeChild(overlay);
+    }
+    if (minimizedDock && document.body.contains(minimizedDock)) {
+      return;
+    }
+    minimizedDock = create("button", {
+      class: "pv-minimized-dock",
+      text: "\u63d0\u793a\u8bcd\u5e93",
+      title: "\u70b9\u51fb\u6062\u590d\u63d0\u793a\u8bcd\u5e93",
+      onclick: restoreManager,
+    });
+    document.body.appendChild(minimizedDock);
+  }
+
   function closeManager() {
     if (document.body.contains(overlay)) document.body.removeChild(overlay);
+    removeMinimizedDock();
   }
 
   function setStatus(leftText, rightText = "") {
@@ -673,6 +716,10 @@ function openManager() {
     currentOffset = 0;
   }
 
+  function getPageLimit() {
+    return currentViewMode === "card_thumbnail" ? 21 : 18;
+  }
+
   function activeFilterSummary() {
     const labels = [];
     if (quickFilters.favorite_only) labels.push("仅收藏");
@@ -692,78 +739,39 @@ function openManager() {
       create("option", { value: "favorite_desc", text: "收藏优先" }),
     ],
   );
-  const filterHint = create("span", { class: "pv-results-hint", text: "缩略图优先浏览" });
   resultControls.appendChild(create("div", { class: "pv-filter-chip-row" }, [
     quickFilterFavorite,
     quickFilterThumb,
     buttonClearFilters,
-    filterHint,
+    sortSelect,
   ]));
-  resultControls.appendChild(sortSelect);
-
-  function refreshQuickFilterUI() {
-    quickFilterFavorite.classList.toggle("pv-filter-chip-active", !!quickFilters.favorite_only);
-    quickFilterThumb.classList.toggle("pv-filter-chip-active", !!quickFilters.has_thumbnail);
-    sortSelect.value = currentSort;
-  }
-
-  function updatePaginationUI(itemsCount = 0) {
-    const total = Math.max(0, currentTotal);
-    const page = total ? Math.floor(currentOffset / pageLimit) + 1 : 1;
-    const totalPages = Math.max(1, Math.ceil(total / pageLimit));
-    const start = total ? currentOffset + 1 : 0;
-    const end = total ? Math.min(currentOffset + itemsCount, total) : 0;
-    paginationInfo.textContent = `${page} / ${totalPages} 页`;
-    buttonPrevPage.disabled = currentOffset <= 0;
-    buttonNextPage.disabled = currentOffset + itemsCount >= total;
-    statusBarLeft.textContent = `共 ${total} 条记录` + (total ? ` · 显示 ${start}-${end}` : "") + (currentStatus === "deleted" ? "（回收站）" : "");
-  }
-
-  function updatePaginationUI(itemsCount = 0) {
-    const total = Math.max(0, currentTotal);
-    const page = total ? Math.floor(currentOffset / pageLimit) + 1 : 1;
-    const totalPages = Math.max(1, Math.ceil(total / pageLimit));
-    const start = total ? currentOffset + 1 : 0;
-    const end = total ? Math.min(currentOffset + itemsCount, total) : 0;
-    paginationInfo.textContent = `${page} / ${totalPages} 页`;
-    buttonPrevPage.disabled = currentOffset <= 0;
-    buttonNextPage.disabled = currentOffset + itemsCount >= total;
-    const filterSummary = activeFilterSummary();
-    const sortSummary =
-      currentSort === "score_desc" ? "评分优先" :
-      currentSort === "favorite_desc" ? "收藏优先" :
-      "最近更新";
-    statusBarLeft.textContent = `共 ${total} 条记录`
-      + (total ? ` · 显示 ${start}-${end}` : "")
-      + (currentStatus === "deleted" ? "（回收站）" : "")
-      + (filterSummary ? ` · 筛选: ${filterSummary}` : "")
-      + ` · 排序: ${sortSummary}`;
-  }
-
+ 
   const viewList = create("button", { class: "pv-filter-chip", text: "列表" });
   const viewCardCompact = create("button", { class: "pv-filter-chip", text: "卡片" });
-  const viewModeGroup = create("div", { class: "pv-filter-chip-row" }, [viewList, viewCardCompact]);
+  const viewThumbnailCard = create("button", { class: "pv-filter-chip", text: "图片" });
+  const viewModeGroup = create("div", { class: "pv-filter-chip-row" }, [viewList, viewCardCompact, viewThumbnailCard]);
   resultControls.appendChild(viewModeGroup);
 
   quickFilterFavorite.textContent = "仅收藏";
   quickFilterThumb.textContent = "有缩略图";
   buttonClearFilters.textContent = "清空筛选";
-  filterHint.textContent = "可切换列表与卡片视图";
   sortSelect.title = "排序方式";
   if (sortSelect.options[0]) sortSelect.options[0].textContent = "最近更新";
   if (sortSelect.options[1]) sortSelect.options[1].textContent = "评分优先";
   if (sortSelect.options[2]) sortSelect.options[2].textContent = "收藏优先";
 
-  refreshQuickFilterUI = function () {
+  function refreshQuickFilterUI() {
     quickFilterFavorite.classList.toggle("pv-filter-chip-active", !!quickFilters.favorite_only);
     quickFilterThumb.classList.toggle("pv-filter-chip-active", !!quickFilters.has_thumbnail);
     viewList.classList.toggle("pv-filter-chip-active", currentViewMode === "list");
     viewCardCompact.classList.toggle("pv-filter-chip-active", currentViewMode === "card_compact");
+    viewThumbnailCard.classList.toggle("pv-filter-chip-active", currentViewMode === "card_thumbnail");
     sortSelect.value = currentSort;
-  };
+  }
 
-  updatePaginationUI = function (itemsCount = 0) {
+  function updatePaginationUI(itemsCount = 0) {
     const total = Math.max(0, currentTotal);
+    const pageLimit = getPageLimit();
     const page = total ? Math.floor(currentOffset / pageLimit) + 1 : 1;
     const totalPages = Math.max(1, Math.ceil(total / pageLimit));
     const start = total ? currentOffset + 1 : 0;
@@ -774,7 +782,10 @@ function openManager() {
     const activeFilters = [];
     if (quickFilters.favorite_only) activeFilters.push("仅收藏");
     if (quickFilters.has_thumbnail) activeFilters.push("有缩略图");
-    const viewLabel = currentViewMode === "list" ? "列表" : "卡片";
+    const viewLabel =
+      currentViewMode === "list" ? "列表" :
+      currentViewMode === "card_thumbnail" ? "图片" :
+      "卡片";
     const sortLabel =
       currentSort === "score_desc" ? "评分优先" :
       currentSort === "favorite_desc" ? "收藏优先" :
@@ -785,10 +796,10 @@ function openManager() {
       + (activeFilters.length ? ` · 筛选: ${activeFilters.join(" / ")}` : "")
       + ` · 视图: ${viewLabel}`
       + ` · 排序: ${sortLabel}`;
-  };
+  }
 
   function applyResultViewMode() {
-    list.classList.remove("pv-card-grid", "pv-card-grid-compact", "pv-list-mode");
+    list.classList.remove("pv-card-grid", "pv-card-grid-compact", "pv-card-grid-thumbnail", "pv-list-mode");
     if (currentViewMode === "list") {
       list.classList.add("pv-list-mode");
       detail.style.display = "";
@@ -796,7 +807,7 @@ function openManager() {
       return;
     }
     list.classList.add("pv-card-grid");
-    list.classList.add("pv-card-grid-compact");
+    list.classList.add(currentViewMode === "card_thumbnail" ? "pv-card-grid-thumbnail" : "pv-card-grid-compact");
     detail.style.display = "none";
     body.style.gridTemplateColumns = sidebarVisible ? "180px 1fr" : "1fr";
   }
@@ -825,12 +836,14 @@ function openManager() {
   });
 
   buttonPrevPage.addEventListener("click", () => {
+    const pageLimit = getPageLimit();
     if (currentOffset <= 0) return;
     currentOffset = Math.max(0, currentOffset - pageLimit);
     reloadList().catch((e) => toast(String(e), "error"));
   });
 
   buttonNextPage.addEventListener("click", () => {
+    const pageLimit = getPageLimit();
     if (currentOffset + pageLimit >= currentTotal) return;
     currentOffset += pageLimit;
     reloadList().catch((e) => toast(String(e), "error"));
@@ -891,6 +904,11 @@ function openManager() {
   });
   viewCardCompact.addEventListener("click", () => {
     currentViewMode = "card_compact";
+    refreshQuickFilterUI();
+    reloadList().catch((e) => toast(String(e), "error"));
+  });
+  viewThumbnailCard.addEventListener("click", () => {
+    currentViewMode = "card_thumbnail";
     refreshQuickFilterUI();
     reloadList().catch((e) => toast(String(e), "error"));
   });
@@ -987,16 +1005,27 @@ function openManager() {
     }
     const params = entry.params || {};
     const matchReasons = entry.match_reasons || assembled.match_reasons || [];
+    const currentScore = Math.max(0, Math.min(5, Math.round(Number(entry.score || 0))));
+    const detailMetaBits = [
+      entry.model_scope?.length ? `模型: ${entry.model_scope.join(" / ")}` : "模型: 不限",
+      `版本: v${entry.version || 1}`,
+      entry.updated_at ? `更新于 ${formatTimestamp(entry.updated_at)}` : "",
+    ].filter(Boolean);
+    const detailStatusMap = {
+      active: "正常",
+      deleted: "已删除",
+      draft: "草稿",
+      archived: "归档",
+    };
+    const detailModelText = entry.model_scope?.length ? entry.model_scope.join(" / ") : "不限";
+    const detailStatusText = detailStatusMap[entry.status] || entry.status || "正常";
+    const detailUpdatedText = entry.updated_at ? `更新于 ${formatTimestamp(entry.updated_at)}` : "更新于 -";
     const tableRows = [
-      ["\u6807\u9898", entry.title || ""],
       ["ID", entry.id || ""],
-      ["\u6807\u7b7e", (entry.tags || []).join(", ")],
-      ["\u6a21\u578b", (entry.model_scope || []).join(", ")],
-      ["\u7248\u672c", String(entry.version || 1)],
-      ["命中原因", matchReasons.length ? matchReasons.join(" / ") : "无"],
+      ["模型", detailModelText],
       { k1: "steps", v1: String(params.steps ?? ""), k2: "cfg", v2: String(params.cfg ?? "") },
       { k1: "sampler", v1: String(params.sampler ?? ""), k2: "scheduler", v2: String(params.scheduler ?? "") },
-      ["seed", String(params.seed ?? "")],
+      { k1: "seed", v1: String(params.seed ?? ""), k2: "", v2: "" },
     ];
 
     const table = create("table", { class: "pv-param-table" });
@@ -1033,9 +1062,19 @@ function openManager() {
       alt: "thumbnail",
       src: entry.thumbnail_data_url || thumbUrl(entry.id, entry.updated_at),
     });
+    const thumbFallback = create("div", { class: "pv-empty pv-thumb-empty", text: "\u6682\u65e0\u7f29\u7565\u56fe" });
     thumb.onerror = () => {
-      thumb.replaceWith(create("div", { class: "pv-empty", text: "\u6682\u65e0\u7f29\u7565\u56fe" }));
+      thumb.replaceWith(thumbFallback);
     };
+    const thumbWrap = create("div", { class: "pv-detail-media" }, [thumb]);
+    const headerRow = create("div", { class: "pv-detail-header-row" }, [
+      create("div", { class: "pv-detail-main-title", text: entry.title || "\u672a\u547d\u540d" }),
+      create("div", { class: "pv-detail-meta-line", text: `版本: v${entry.version || 1} · 状态: ${detailStatusText}` }),
+      create("div", { class: "pv-detail-meta-line", text: detailUpdatedText }),
+    ]);
+    const tagWrap = (entry.tags || []).length
+      ? create("div", { class: "pv-card-tags" }, (entry.tags || []).map((tag) => create("span", { class: "pv-card-tag", text: tag })))
+      : create("div", { class: "pv-detail-meta-line", text: "标签: 无" });
 
     const favoriteButton = create("button", {
       class: `pv-btn pv-small ${entry.favorite ? "pv-primary" : ""}`,
@@ -1048,15 +1087,20 @@ function openManager() {
       { class: "pv-input pv-detail-score", title: "评分" },
       scoreOptions.map((value) => create("option", { value: String(value), text: `评分 ${value}` })),
     );
-    scoreSelect.value = String(Math.max(0, Math.min(5, Math.round(Number(entry.score || 0)))));
+    scoreSelect.value = String(currentScore);
     scoreSelect.style.display = "none";
-    const currentScore = Math.max(0, Math.min(5, Math.round(Number(entry.score || 0))));
     const scoreStars = create("div", { class: "pv-detail-stars", title: "评分" });
     const detailActions = create("div", { class: "pv-detail-actions" }, [
       favoriteButton,
       scoreStars,
       scoreSelect,
     ]);
+    const topRight = create("div", { class: "pv-detail-top-right" }, [
+      headerRow,
+      detailActions,
+      tagWrap,
+    ]);
+    const topRow = create("div", { class: "pv-detail-top-row" }, [thumbWrap, topRight]);
 
     const refreshDetailMeta = async (patch) => {
       try {
@@ -1138,8 +1182,7 @@ function openManager() {
     ]);
 
     targetBody.textContent = "";
-    targetBody.appendChild(thumb);
-    targetBody.appendChild(detailActions);
+    targetBody.appendChild(topRow);
     targetBody.appendChild(table);
     targetBody.appendChild(prompts);
   }
@@ -1612,6 +1655,7 @@ function openManager() {
     if (inputTags.value.trim()) params.set("tags", inputTags.value.trim());
     if (inputModel.value.trim()) params.set("model", inputModel.value.trim());
     params.set("status", currentStatus);
+    const pageLimit = getPageLimit();
     params.set("limit", String(pageLimit));
     params.set("offset", String(currentOffset));
     params.set("sort", currentSort);
@@ -1621,6 +1665,7 @@ function openManager() {
     const result = await request(`/entries?${params.toString()}`);
     currentTotal = Math.max(0, Number(result.total || 0));
     if (currentTotal > 0 && currentOffset >= currentTotal) {
+      const pageLimit = getPageLimit();
       currentOffset = Math.max(0, Math.floor((currentTotal - 1) / pageLimit) * pageLimit);
       return await reloadList();
     }
@@ -1761,7 +1806,6 @@ function openManager() {
         thumb.onerror = () => { thumb.style.display = "none"; };
         const subText = [
           (item.tags || []).join(", "),
-          (item.match_reasons || []).join(" / "),
           formatTimestamp(item.updated_at),
           `评分 ${Number(item.score || 0).toFixed(1)}`,
         ].filter(Boolean).join(" · ");
@@ -1779,6 +1823,45 @@ function openManager() {
           await selectSummaryItem(item, row, "pv-row-active");
         });
         list.appendChild(row);
+        continue;
+      }
+
+      if (currentViewMode === "card_thumbnail") {
+        const thumbCard = create("div", { class: "pv-card pv-thumb-card", "data-entry-id": item.id });
+        const thumbWrap = create("div", { class: "pv-thumb-card-media" });
+        const thumb = create("img", {
+          class: "pv-card-thumb pv-thumb-card-thumb",
+          alt: "thumbnail",
+          src: thumbUrl(item.id, item.updated_at),
+        });
+        thumb.onerror = () => {
+          thumb.replaceWith(create("div", { class: "pv-card-thumb pv-card-thumb-empty pv-thumb-card-thumb", text: "暂无缩略图" }));
+        };
+        const copyIcon = create("button", {
+          class: "pv-btn pv-small pv-icon-btn pv-thumb-card-copy",
+          text: "⧉",
+          title: "复制正向提示词",
+        });
+        copyIcon.addEventListener("click", async (event) => {
+          event.stopPropagation();
+          try {
+            const full = await request(`/entries/${encodeURIComponent(item.id)}`);
+            await copyTextToClipboard(full?.raw?.positive || "");
+            toast("已复制正向提示词", "success", 1500);
+          } catch (error) {
+            toast(`复制失败: ${error}`, "error");
+          }
+        });
+        thumbWrap.appendChild(thumb);
+        thumbWrap.appendChild(create("span", { class: "pv-thumb-card-index", text: `#${rowIndex}` }));
+        thumbWrap.appendChild(copyIcon);
+        thumbCard.appendChild(thumbWrap);
+        thumbCard.appendChild(create("div", { class: "pv-thumb-card-title", text: item.title || "(未命名)" }));
+        thumbCard.addEventListener("click", async (event) => {
+          if (event.target === copyIcon) return;
+          await selectSummaryItem(item, thumbCard, "pv-card-active");
+        });
+        list.appendChild(thumbCard);
         continue;
       }
 
@@ -1876,6 +1959,7 @@ function openManager() {
   overlay.addEventListener("keydown", managerKeyHandler);
 
   buttonNew.addEventListener("click", () => openEditor(null));
+  buttonMinimize.addEventListener("click", minimizeManager);
   buttonClose.addEventListener("click", closeManager);
   overlay.addEventListener("click", (event) => {
     if (event.target === overlay) closeManager();
