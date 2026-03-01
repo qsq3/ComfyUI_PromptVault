@@ -7,3 +7,6 @@ __pycache__/
 tests/
 docs/
 superpowers/
+AGENTS.md
+test_detail_layout.py
+test_frontend_pagination_ui.py
