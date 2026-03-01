@@ -57,8 +57,10 @@
 | `title` | STRING | 记录标题 |
 | `tags` | STRING | 标签，逗号分隔 |
 | `model` | STRING | 模型名，留空时尝试自动提取 |
-| `auto_generate` | BOOLEAN | 是否启用 LLM 自动补全，默认关闭 |
-| `auto_generate_mode` | ENUM | `auto` / `title_only` / `tags_only` / `title_and_tags`，默认 `title_and_tags` |
+| `positive_prompt` | STRING | 可选正向提示词，有输入时优先保存，否则从图片元数据提取 |
+| `negative_prompt` | STRING | 可选反向提示词，有输入时优先保存，否则从图片元数据提取 |
+| `llm_generate` | BOOLEAN | 是否启用 LLM 自动补全，默认关闭 |
+| `llm_generate_mode` | ENUM | `auto` / `title_only` / `tags_only` / `title_and_tags`，默认 `title_and_tags` |
 
 | 输出 | 类型 | 说明 |
 |------|------|------|
@@ -67,8 +69,8 @@
 
 自动提取内容：
 
-- 正向提示词
-- 负向提示词
+- 正向提示词（未提供 `positive_prompt` 时）
+- 负向提示词（未提供 `negative_prompt` 时）
 - `steps`
 - `cfg`
 - `sampler`
@@ -79,8 +81,8 @@
 
 自动生成说明：
 
-- `auto_generate=false` 时不调用 LLM
-- `auto_generate=true` 时按 `auto_generate_mode` 调用已配置规则
+- `llm_generate=false` 时不调用 LLM
+- `llm_generate=true` 时按 `llm_generate_mode` 调用已配置规则
 - LLM 生成的标签最多保留前 5 个
 - 如果 LLM 未启用、配置无效或生成失败，会回退到本地默认逻辑，不阻止保存
 

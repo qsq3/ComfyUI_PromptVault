@@ -596,14 +596,21 @@ def _debug_dump_png_meta(
     final_data,
 ):
     try:
-        keys = list(extra_pnginfo.keys()) if isinstance(extra_pnginfo, dict) else []
-        logger.debug("extra_pnginfo keys: %s", keys)
-        logger.debug("prompt_from_png found: %s", bool(prompt_from_png))
-        logger.debug("workflow_data: %s", json.dumps(workflow_data, ensure_ascii=False, default=str))
-        logger.debug("png_meta_data: %s", json.dumps(png_meta_data, ensure_ascii=False, default=str))
-        logger.debug("source_image_paths: %s", image_meta_paths)
-        logger.debug("source_image_meta_data: %s", json.dumps(image_meta_data, ensure_ascii=False, default=str))
-        logger.debug("final_generation_data: %s", json.dumps(final_data, ensure_ascii=False, default=str))
+        dump_items = [
+            ("extra_pnginfo", extra_pnginfo),
+            ("prompt_from_png", prompt_from_png),
+            ("workflow_data", workflow_data),
+            ("png_meta_data", png_meta_data),
+            ("source_image_paths", image_meta_paths),
+            ("source_image_meta_data", image_meta_data),
+            ("final_generation_data", final_data),
+        ]
+        print("[PromptVaultSaveNode] extracted metadata begin")
+        for label, value in dump_items:
+            serialized = json.dumps(value, ensure_ascii=False, default=str)
+            print(f"[PromptVaultSaveNode] {label}: {serialized}")
+            logger.debug("%s: %s", label, serialized)
+        print("[PromptVaultSaveNode] extracted metadata end")
     except Exception as exc:
         logger.debug("dump failed: %s", exc)
 
@@ -666,7 +673,6 @@ def _maybe_auto_fill_with_llm(title, tags, positive, negative, auto_generate, au
     client = LLMClient(config)
     changed = False
     try:
-        _run_async_sync(client.test_connection())
         if need_title and need_tags:
             result = _run_async_sync(
                 client.auto_title_and_tags(
@@ -838,13 +844,13 @@ class PromptVaultQueryNode:
 
 class PromptVaultSaveNode:
     @staticmethod
-    def _default_auto_generate_enabled():
+    def _default_llm_generate_enabled():
         try:
             store = PromptVaultStore.get()
             config = normalize_config(store.get_llm_config())
             return bool(config.get("enabled"))
         except Exception as exc:
-            logger.debug("PromptVaultSaveNode default auto_generate fallback: %s", exc)
+            logger.debug("PromptVaultSaveNode default llm_generate fallback: %s", exc)
             return False
 
     @classmethod
@@ -857,8 +863,10 @@ class PromptVaultSaveNode:
             "optional": {
                 "tags": ("STRING", {"default": "", "multiline": False}),
                 "model": ("STRING", {"default": "", "multiline": False}),
-                "auto_generate": ("BOOLEAN", {"default": cls._default_auto_generate_enabled()}),
-                "auto_generate_mode": (["auto", "title_only", "tags_only", "title_and_tags"], {"default": "title_and_tags"}),
+                "positive_prompt": ("STRING", {"default": "", "multiline": True}),
+                "negative_prompt": ("STRING", {"default": "", "multiline": True}),
+                "llm_generate": ("BOOLEAN", {"default": cls._default_llm_generate_enabled()}),
+                "llm_generate_mode": (["auto", "title_only", "tags_only", "title_and_tags"], {"default": "title_and_tags"}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -878,8 +886,12 @@ class PromptVaultSaveNode:
         title,
         tags="",
         model="",
-        auto_generate=False,
-        auto_generate_mode="auto",
+        positive_prompt="",
+        negative_prompt="",
+        llm_generate=False,
+        llm_generate_mode="auto",
+        auto_generate=None,
+        auto_generate_mode=None,
         prompt=None,
         extra_pnginfo=None,
     ):
@@ -887,7 +899,7 @@ class PromptVaultSaveNode:
             thumb_png, thumb_w, thumb_h = _make_thumbnail_png(image, target_width=256)
         except Exception as exc:
             return ("", f"保存失败: 缩略图处理错误: {exc}")
-
+       
         # Prefer PNG metadata, then fallback to current workflow prompt.
         prompt_from_png = _extract_prompt_from_pnginfo(extra_pnginfo)
         data = _extract_generation_data(prompt_from_png or prompt)
@@ -903,6 +915,7 @@ class PromptVaultSaveNode:
         for key, value in image_meta_data.items():
             if value not in (None, "", 0):
                 data[key] = value
+    
         _debug_dump_png_meta(
             extra_pnginfo,
             prompt_from_png,
@@ -912,7 +925,14 @@ class PromptVaultSaveNode:
             image_meta_paths,
             data,
         )
-        positive = data.get("positive", "")
+        positive = str(positive_prompt or "").strip() or data.get("positive", "")
+        negative = str(negative_prompt or "").strip() or data.get("negative", "")
+        effective_llm_generate = bool(auto_generate) if auto_generate is not None else bool(llm_generate)
+        effective_llm_generate_mode = (
+            str(auto_generate_mode or "auto")
+            if auto_generate_mode is not None
+            else str(llm_generate_mode or "auto")
+        )
         if not str(positive or "").strip():
             return ("", "保存失败: 未提取到正向提示词，请确认输入图像或工作流元数据")
         fallback5 = _first_five_chars(positive)
@@ -924,9 +944,9 @@ class PromptVaultSaveNode:
             final_title,
             tag_list,
             positive,
-            data.get("negative", ""),
-            bool(auto_generate),
-            str(auto_generate_mode or "auto"),
+            negative,
+            effective_llm_generate,
+            effective_llm_generate_mode,
         )
 
         if not final_title:
@@ -945,7 +965,7 @@ class PromptVaultSaveNode:
             "model_scope": model_list,
             "raw": {
                 "positive": positive,
-                "negative": data.get("negative", ""),
+                "negative": negative,
             },
             "params": {
                 "steps": data.get("steps", 20),
