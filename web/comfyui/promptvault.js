@@ -717,7 +717,7 @@ function openManager() {
   }
 
   function getPageLimit() {
-    return currentViewMode === "card_thumbnail" ? 21 : 18;
+    return currentViewMode === "card_thumbnail" ? 100 : 50;
   }
 
   function activeFilterSummary() {
